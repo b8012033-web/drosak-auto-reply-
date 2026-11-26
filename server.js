@@ -33,6 +33,7 @@ function readStore() {
     if (!Array.isArray(data.replies)) data.replies = [];
     if (typeof data.defaultReply !== "string") data.defaultReply = "";
     if (typeof data.photoReply !== "string") data.photoReply = "";
+    if (typeof data.businessOwnerId !== "string" && typeof data.businessOwnerId !== "number") data.businessOwnerId = "";
     return data;
   } catch { return { replies: [], defaultReply: "", photoReply: "" }; }
 }
@@ -73,6 +74,9 @@ function normalize(s) { return String(s || "").trim().toLocaleLowerCase(); }
 async function handleBusinessMessage(message) {
   if (!message || !message.business_connection_id || !message.chat) return;
   if (message.from && message.from.is_bot) return;
+  // Ignore messages sent by the connected business account owner.
+  const ownerId = readStore().businessOwnerId;
+  if (ownerId && message.from && String(message.from.id) === String(ownerId)) return;
   const store = readStore();
   // Custom response for any incoming photo (with or without a caption).
   if (Array.isArray(message.photo) && message.photo.length) {
@@ -122,6 +126,13 @@ app.post(`/telegram/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
   res.sendStatus(200);
   try {
     const update = req.body || {};
+    // Telegram sends business_connection updates containing the owner's Telegram user ID.
+    // Save it so outgoing messages written by the account owner are never auto-replied to.
+    if (update.business_connection?.user?.id) {
+      const store = readStore();
+      store.businessOwnerId = String(update.business_connection.user.id);
+      writeStore(store);
+    }
     if (update.business_message) await handleBusinessMessage(update.business_message);
   } catch (err) { console.error("Update handling error:", err.message); }
 });
@@ -142,7 +153,8 @@ app.put("/api/replies", (req, res) => {
   })).filter(r => r.keyword && r.reply);
   const defaultReply = String(body.defaultReply || "").trim().slice(0, 4000);
   const photoReply = String(body.photoReply || "").trim().slice(0, 4000);
-  writeStore({ replies, defaultReply, photoReply });
+  const previous = readStore();
+  writeStore({ replies, defaultReply, photoReply, businessOwnerId: previous.businessOwnerId || "" });
   res.json({ ok: true, count: replies.length });
 });
 
