@@ -29,7 +29,7 @@ if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
 
 function ensureStore() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [] }, null, 2));
+  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {} }, null, 2));
 }
 function readStore() {
   ensureStore();
@@ -41,8 +41,9 @@ function readStore() {
     if (typeof data.businessOwnerId !== "string" && typeof data.businessOwnerId !== "number") data.businessOwnerId = "";
     if (!data.paymentPending || typeof data.paymentPending !== "object") data.paymentPending = {};
     if (!Array.isArray(data.paymentRecords)) data.paymentRecords = [];
+    if (!data.paymentAdminFlows || typeof data.paymentAdminFlows !== "object") data.paymentAdminFlows = {};
     return data;
-  } catch { return { replies: [], defaultReply: "", photoReply: "" }; }
+  } catch { return { replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {} }; }
 }
 function writeStore(data) {
   ensureStore();
@@ -204,19 +205,32 @@ async function analyzePaymentImage(buffer) {
   };
 }
 
+
+function findPaymentRecord(store, id) {
+  return store.paymentRecords.find(r => String(r.id) === String(id));
+}
 async function notifyAdminPayment(record, photoFileId, duplicate) {
   const duplicateText = duplicate
-    ? `\n🚨 تنبيه تكرار: نفس رقم العملية أو نفس ملف الصورة سبق تسجيله. سجل سابق: ${duplicate.name || "غير معروف"}، Telegram ID: ${duplicate.telegramUserId || "غير معروف"}.`
+    ? `\n🚨 تنبيه تكرار: نفس الصورة أو مرجع العملية سبق تسجيله. راجع الطلب قبل الموافقة.`
     : "";
-  const caption = `📥 طلب مراجعة تحويل جديد\n👤 الاسم: ${record.name || "غير متوفر"}\n📚 الشعبة: ${record.section || "غير متوفر"}\n🆔 Telegram ID: ${record.telegramUserId}\n🔢 رقم العملية: ${record.transactionNumber}\n🏦 المصدر الظاهر: ${record.provider}\n🖼️ تشابه الصورة مع إيصال: ${record.receiptConfidence}% (ليس نسبة صحة الدفع)\n⚠️ ملاحظات الصورة: ${record.visualWarnings || "لا توجد ملاحظات"}${duplicateText}\n\nيرجى التأكد من وصول المبلغ فعليًا قبل تفعيل الاشتراك.`;
+  const caption = `📥 طلب مراجعة تحويل جديد\n🧾 رقم الطلب: ${record.id}\n👤 الاسم: ${record.name || "غير متوفر"}\n📚 الشعبة: ${record.section || "غير متوفر"}\n📱 رقم التحويل منه: ${record.senderPhone || "غير متوفر"}\n🆔 Telegram ID: ${record.telegramUserId}\n🔢 مرجع العملية الظاهر: ${record.visibleReference || "غير ظاهر"}\n🏦 المصدر الظاهر: ${record.provider || "غير محدد"}\n🖼️ تشابه الصورة مع إيصال: ${record.receiptConfidence || 0}% (ليس إثباتًا لصحة الدفع)\n⚠️ ملاحظات الصورة: ${record.visualWarnings || "لا توجد"}${duplicateText}\n\nتأكد من وصول المبلغ فعليًا قبل تفعيل الاشتراك.`;
+  const reply_markup = { inline_keyboard: [[
+    { text: "✅ تم الاستلام", callback_data: `pay:received:${record.id}` },
+    { text: "❌ لم يتم الاستلام", callback_data: `pay:missing:${record.id}` }
+  ]] };
+  let sent;
   try {
-    await telegram("sendPhoto", { chat_id: ADMIN_TELEGRAM_ID, photo: photoFileId, caption: caption.slice(0, 1000) });
+    sent = await telegram("sendPhoto", { chat_id: ADMIN_TELEGRAM_ID, photo: photoFileId, caption: caption.slice(0, 1000), reply_markup });
   } catch (err) {
     console.error("Admin payment photo notification failed:", err.message);
-    await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: caption.slice(0, 3900) });
+    sent = await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: caption.slice(0, 3900), reply_markup });
+  }
+  if (sent?.message_id) {
+    const store = readStore();
+    const saved = findPaymentRecord(store, record.id);
+    if (saved) { saved.adminMessageId = sent.message_id; writeStore(store); }
   }
 }
-
 async function handlePaymentPhoto(message) {
   const bestPhoto = message.photo?.[message.photo.length - 1];
   if (!bestPhoto?.file_id) return;
@@ -224,7 +238,9 @@ async function handlePaymentPhoto(message) {
   try {
     const buffer = await getTelegramPhotoBuffer(bestPhoto.file_id);
     const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
-    const analysis = await analyzePaymentImage(buffer);
+    let analysis = { isReceipt: null, confidence: 0, provider: "غير محدد", warnings: "", visibleReference: "" };
+    try { analysis = await analyzePaymentImage(buffer); }
+    catch (err) { console.warn("Payment image analysis skipped:", err.message); }
     const store = readStore();
     store.paymentPending[key] = {
       fileId: bestPhoto.file_id, imageHash,
@@ -232,59 +248,264 @@ async function handlePaymentPhoto(message) {
       provider: analysis.provider || "غير محدد",
       visualWarnings: analysis.warnings || "",
       visibleReference: analysis.visibleReference || "",
-      name: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" "),
+      businessConnectionId: message.business_connection_id,
+      chatId: String(message.chat.id),
+      name: "",
       telegramUserId: String(message.from?.id || message.chat.id),
+      step: "phone",
       createdAt: Date.now()
     };
     writeStore(store);
-    if (!OPENAI_API_KEY) {
-      await sendBusinessText(message, "📩 وصلت الصورة. فحص نوع الإيصال بالذكاء الاصطناعي غير مفعّل. ابعت رقم العملية الموجود في الإيصال علشان أبعته للإدارة للمراجعة.");
-    } else if (analysis.isReceipt && analysis.confidence >= 55) {
-      await sendBusinessText(message, `📩 الصورة تبدو كإيصال تحويل من ${analysis.provider || "مصدر دفع"} بنسبة تشابه ظاهري ${analysis.confidence}%، ودي مش نسبة صحة الدفع.\n\nابعت رقم العملية/رقم التحويل الموجود في الإيصال علشان أبعته للإدارة للمراجعة.`);
-    } else {
-      await sendBusinessText(message, "📩 وصلت الصورة. مش قادر أحدد بثقة إنها إيصال تحويل. لو دي صورة التحويل فعلًا، ابعت رقم العملية الموجود فيها وسنراجعها يدويًا.");
-    }
+    await sendBusinessText(message, "✅ تمام، وصلتني صورة التحويل.\n\nمحتاج الرقم اللي حولت منه الفلوس، وبعده هطلب اسمك وشعبتك.\n\n📱 ابعت رقم الهاتف اللي تم التحويل منه.");
   } catch (err) {
     console.error("Payment image processing failed:", err.message);
-    await sendBusinessText(message, "📩 وصلت الصورة، لكن حصلت مشكلة في فحصها. ابعت رقم العملية المكتوب في الإيصال، وسيتم إرسال الصورة والرقم للإدارة للمراجعة.");
+    await sendBusinessText(message, "📩 وصلت الصورة، لكن حصلت مشكلة في حفظها للمراجعة. جرّب إرسالها مرة أخرى بعد قليل.");
   }
 }
-
-async function handlePaymentTransactionNumber(message, text) {
+async function handlePaymentForm(message, text) {
   const key = trialKey(message);
   const store = readStore();
   const pending = store.paymentPending[key];
-  if (!pending || Date.now() - pending.createdAt > 24 * 60 * 60 * 1000) return false;
-  const transactionNumber = text.trim().replace(/\s+/g, "").slice(0, 120);
-  if (transactionNumber.length < 4) {
-    await sendBusinessText(message, "رقم العملية قصير أو غير واضح. ابعت رقم العملية كاملًا كما يظهر في إيصال التحويل.");
+  if (!pending || Date.now() - pending.createdAt > 24 * 60 * 60 * 1000) {
+    if (pending) { delete store.paymentPending[key]; writeStore(store); }
+    return false;
+  }
+  const value = String(text || "").trim().slice(0, 150);
+  if (pending.step === "phone") {
+    const digits = value.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) {
+      await sendBusinessText(message, "رقم الهاتف مش واضح. ابعت رقم الهاتف اللي حولت منه الفلوس بشكل صحيح.");
+      return true;
+    }
+    pending.senderPhone = value;
+    pending.step = "name";
+    pending.createdAt = Date.now();
+    store.paymentPending[key] = pending; writeStore(store);
+    await sendBusinessText(message, "👤 تمام، ابعت اسمك بالكامل.");
     return true;
   }
-  const duplicate = store.paymentRecords.find(r =>
-    String(r.transactionNumber).toLowerCase() === transactionNumber.toLowerCase() ||
-    (pending.imageHash && r.imageHash === pending.imageHash)
-  );
-  const record = {
-    id: crypto.randomUUID(),
-    name: pending.name || message.from?.first_name || "",
-    section: "",
-    telegramUserId: pending.telegramUserId || String(message.from?.id || message.chat.id),
-    transactionNumber,
-    imageHash: pending.imageHash,
-    provider: pending.provider || "غير محدد",
-    receiptConfidence: pending.receiptConfidence || 0,
-    visualWarnings: pending.visualWarnings || "",
-    duplicate: Boolean(duplicate),
-    createdAt: new Date().toISOString()
-  };
-  store.paymentRecords.push(record);
-  delete store.paymentPending[key];
+  if (pending.step === "name") {
+    if (value.length < 2) {
+      await sendBusinessText(message, "اكتب اسمك بالكامل بشكل صحيح.");
+      return true;
+    }
+    pending.name = value.slice(0, 100);
+    pending.step = "section";
+    pending.createdAt = Date.now();
+    store.paymentPending[key] = pending; writeStore(store);
+    await sendBusinessText(message, "🎓 ابعت شعبتك، مثال: علمي علوم أو علمي رياضة أو أدبي أو أزهر.");
+    return true;
+  }
+  if (pending.step === "section") {
+    if (value.length < 2) {
+      await sendBusinessText(message, "ابعت اسم الشعبة بشكل صحيح.");
+      return true;
+    }
+    const duplicate = store.paymentRecords.find(r =>
+      (pending.imageHash && r.imageHash === pending.imageHash) ||
+      (pending.visibleReference && r.visibleReference && String(r.visibleReference).trim() === String(pending.visibleReference).trim())
+    );
+    const record = {
+      id: crypto.randomUUID(),
+      name: pending.name,
+      section: value.slice(0, 80),
+      senderPhone: pending.senderPhone,
+      telegramUserId: pending.telegramUserId,
+      businessConnectionId: pending.businessConnectionId,
+      chatId: pending.chatId,
+      imageHash: pending.imageHash,
+      visibleReference: pending.visibleReference || "",
+      provider: pending.provider || "غير محدد",
+      receiptConfidence: pending.receiptConfidence || 0,
+      visualWarnings: pending.visualWarnings || "",
+      duplicate: Boolean(duplicate),
+      status: "pending_review",
+      createdAt: new Date().toISOString()
+    };
+    store.paymentRecords.push(record);
+    if (store.paymentRecords.length > 2000) store.paymentRecords.splice(0, store.paymentRecords.length - 2000);
+    delete store.paymentPending[key];
+    writeStore(store);
+    await notifyAdminPayment(record, pending.fileId, duplicate);
+    await sendBusinessText(message, "✅ تمام، وصلتني صورة التحويل بكل تفاصيلها.\n\nتم إرسال بياناتك للإدارة للمراجعة والتأكد من وصول المبلغ.\n\n⏳ الرجاء عدم إرسال أي رسائل أخرى، وسيتم الرد عليك في أسرع وقت.\n\n💙 شكرًا لاشتراكك في دروسك بلس.");
+    return true;
+  }
+  return false;
+}
+async function callPlatformPaymentApproval(record, duration) {
+  if (!PLATFORM_API_URL || !BOT_TRIAL_SECRET) throw new Error("تكامل إصدار الاشتراك غير مضبوط");
+  const response = await fetch(`${PLATFORM_API_URL}/api/bot/payment/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-bot-trial-secret": BOT_TRIAL_SECRET },
+    body: JSON.stringify({
+      requestId: record.id,
+      name: record.name,
+      section: record.section,
+      phone: record.senderPhone,
+      telegramUserId: record.telegramUserId,
+      duration,
+      adminTelegramId: String(ADMIN_TELEGRAM_ID)
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success || !data.code) throw new Error(data.error || `Platform API returned ${response.status}`);
+  return data;
+}
+async function finishPaymentApproval(record, duration) {
+  const result = await callPlatformPaymentApproval(record, duration);
+  const store = readStore();
+  const saved = findPaymentRecord(store, record.id);
+  if (saved) {
+    saved.status = "approved";
+    saved.approvedAt = new Date().toISOString();
+    saved.studentCode = result.code;
+    saved.subscriptionExpiresAt = result.expiresAt || null;
+    saved.subscriptionAction = result.action || "created";
+    saved.durationLabel = result.durationLabel || duration.type || "مخصص";
+  }
+  delete store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)];
   writeStore(store);
-  await notifyAdminPayment(record, pending.fileId, duplicate);
-  await sendBusinessText(message, duplicate
-    ? "⚠️ تم استلام البيانات، لكن رقم العملية أو الصورة سبق إرسالها. تم تنبيه الإدارة للمراجعة، وده مش تأكيد للدفع."
-    : "✅ تم استلام صورة التحويل ورقم العملية وإرسالهم للإدارة للمراجعة. سيتم تفعيل الاشتراك بعد التأكد من وصول الدفع.");
-  return true;
+  const studentMessage = {
+    business_connection_id: record.businessConnectionId,
+    chat: { id: Number(record.chatId) || record.chatId }
+  };
+  await sendBusinessText(studentMessage, `🎉 تم تأكيد استلام التحويل وتفعيل اشتراكك في دروسك بلس.\n\n👤 الاسم: ${record.name}\n📚 الشعبة: ${record.section}\n🔑 كود الدخول: ${result.code}\n📅 مدة الاشتراك: ${result.durationLabel || "حسب المدة المحددة"}\n🗓️ تاريخ الانتهاء: ${result.expiresAtText || "ظاهر داخل المنصة"}\n\n💙 نتمنى لك التوفيق!`);
+  await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `✅ تم تفعيل الاشتراك بنجاح.\nالطالب: ${record.name}\nالكود: ${result.code}\nالعملية: ${result.action || "إصدار/تجديد"}\nالمدة: ${result.durationLabel || duration.type}\nتاريخ الانتهاء: ${result.expiresAtText || result.expiresAt || "—"}` });
+}
+async function handlePaymentAdminText(message, text) {
+  if (String(message.from?.id) !== String(ADMIN_TELEGRAM_ID)) return false;
+  const store = readStore();
+  const flow = store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)];
+  if (!flow && message.reply_to_message?.message_id) {
+    const repliedRecord = store.paymentRecords.find(r => Number(r.adminMessageId) === Number(message.reply_to_message.message_id));
+    const normalizedText = normalize(text);
+    if (repliedRecord && repliedRecord.status === "pending_review" && (normalizedText === "تم الاستلام" || normalizedText.includes("تم الاستلام") && !normalizedText.includes("لم يتم الاستلام"))) {
+      repliedRecord.status = "awaiting_duration";
+      repliedRecord.reviewedAt = new Date().toISOString();
+      store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)] = { recordId: repliedRecord.id, step: "duration", createdAt: Date.now() };
+      writeStore(store);
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `✅ تم تأكيد استلام التحويل.
+الطالب: ${repliedRecord.name}
+الشعبة: ${repliedRecord.section}
+
+حدد مدة الاشتراك:`, reply_markup: { inline_keyboard: [
+        [{ text: "شهر", callback_data: `pay:duration:${repliedRecord.id}:month` }, { text: "سنة", callback_data: `pay:duration:${repliedRecord.id}:year` }],
+        [{ text: "أيام مخصصة", callback_data: `pay:duration:${repliedRecord.id}:days` }, { text: "حتى تاريخ", callback_data: `pay:duration:${repliedRecord.id}:date` }]
+      ]}});
+      return true;
+    }
+    if (repliedRecord && repliedRecord.status === "pending_review" && (normalizedText.includes("لم يتم الاستلام") || normalizedText.includes("لم يصل"))) {
+      repliedRecord.status = "payment_not_received";
+      repliedRecord.reviewedAt = new Date().toISOString();
+      writeStore(store);
+      await sendBusinessText({ business_connection_id: repliedRecord.businessConnectionId, chat: { id: Number(repliedRecord.chatId) || repliedRecord.chatId } }, `❌ لم يتم تأكيد وصول التحويل حتى الآن.\n\nيرجى مراجعة بيانات التحويل والتواصل مع الإدارة إذا كنت ترى أن هناك خطأ.`);
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `تم تسجيل عدم الاستلام للطلب ${repliedRecord.id} (${repliedRecord.name}).` });
+      return true;
+    }
+  }
+  if (!flow) return false;
+  const record = findPaymentRecord(store, flow.recordId);
+  if (!record) {
+    delete store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)]; writeStore(store);
+    await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "الطلب غير موجود أو انتهت صلاحيته." });
+    return true;
+  }
+  if (flow.step === "days") {
+    const days = Number(String(text).trim());
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "اكتب عدد أيام صحيح من 1 إلى 3650." });
+      return true;
+    }
+    try { await finishPaymentApproval(record, { type: "days", days }); }
+    catch (e) { await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `تعذر تفعيل الاشتراك: ${e.message}` }); }
+    return true;
+  }
+  if (flow.step === "date") {
+    const raw = String(text).trim();
+    const match = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+    if (!match) {
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "اكتب التاريخ بصيغة يوم/شهر/سنة، مثال: 1/4/2027" });
+      return true;
+    }
+    const date = `${match[3]}-${String(match[2]).padStart(2,"0")}-${String(match[1]).padStart(2,"0")}`;
+    const check = new Date(`${date}T23:59:59+02:00`);
+    if (Number.isNaN(check.getTime()) || check.getDate() !== Number(match[1]) || check.getMonth() + 1 !== Number(match[2]) || check.getFullYear() !== Number(match[3]) || check.getTime() <= Date.now()) {
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "التاريخ غير صحيح أو انتهى. ابعت تاريخًا مستقبليًا بصيغة يوم/شهر/سنة." });
+      return true;
+    }
+    try { await finishPaymentApproval(record, { type: "date", date }); }
+    catch (e) { await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `تعذر تفعيل الاشتراك: ${e.message}` }); }
+    return true;
+  }
+  return false;
+}
+async function handlePaymentCallback(query) {
+  const adminId = String(query.from?.id || "");
+  if (adminId !== String(ADMIN_TELEGRAM_ID)) {
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "هذا الزر مخصص للإدارة فقط.", show_alert: true });
+    return;
+  }
+  const parts = String(query.data || "").split(":");
+  const action = parts[1];
+  const recordId = parts[2];
+  const store = readStore();
+  const record = findPaymentRecord(store, recordId);
+  if (!record) {
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "الطلب غير موجود." });
+    return;
+  }
+  if (action === "missing") {
+    if (record.status !== "pending_review") {
+      await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "تم التعامل مع الطلب بالفعل." });
+      return;
+    }
+    record.status = "payment_not_received";
+    record.reviewedAt = new Date().toISOString();
+    writeStore(store);
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "تم تسجيل عدم الاستلام." });
+    await sendBusinessText({ business_connection_id: record.businessConnectionId, chat: { id: Number(record.chatId) || record.chatId } }, "❌ لم يتم تأكيد وصول التحويل حتى الآن.\n\nيرجى مراجعة بيانات التحويل والتواصل مع الإدارة إذا كنت ترى أن هناك خطأ.");
+    await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `تم تسجيل أن التحويل لم يصل للطلب ${record.id} (${record.name}).` });
+    return;
+  }
+  if (action === "received") {
+    if (record.status !== "pending_review") {
+      await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "تم التعامل مع الطلب بالفعل." });
+      return;
+    }
+    record.status = "awaiting_duration";
+    record.reviewedAt = new Date().toISOString();
+    store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)] = { recordId: record.id, step: "duration", createdAt: Date.now() };
+    writeStore(store);
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "تم تأكيد الاستلام. حدد مدة الاشتراك." });
+    await telegram("sendMessage", {
+      chat_id: ADMIN_TELEGRAM_ID,
+      text: `✅ تم تأكيد استلام التحويل.\nالطالب: ${record.name}\nالشعبة: ${record.section}\n\nحدد مدة الاشتراك:`,
+      reply_markup: { inline_keyboard: [
+        [{ text: "شهر", callback_data: `pay:duration:${record.id}:month` }, { text: "سنة", callback_data: `pay:duration:${record.id}:year` }],
+        [{ text: "أيام مخصصة", callback_data: `pay:duration:${record.id}:days` }, { text: "حتى تاريخ", callback_data: `pay:duration:${record.id}:date` }]
+      ]}
+    });
+    return;
+  }
+  if (action === "duration") {
+    const mode = parts[3];
+    const flow = store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)];
+    if (record.status !== "awaiting_duration" || !flow || flow.recordId !== record.id) {
+      await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "اختار مدة الاشتراك من طلب قيد المراجعة." });
+      return;
+    }
+    await telegram("answerCallbackQuery", { callback_query_id: query.id, text: "تم اختيار المدة." });
+    if (mode === "month" || mode === "year") {
+      try { await finishPaymentApproval(record, { type: mode }); }
+      catch (e) { await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `تعذر تفعيل الاشتراك: ${e.message}` }); }
+    } else if (mode === "days") {
+      flow.step = "days"; store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)] = flow; writeStore(store);
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "✏️ ابعت عدد الأيام المطلوبة (من 1 إلى 3650)." });
+    } else if (mode === "date") {
+      flow.step = "date"; store.paymentAdminFlows[String(ADMIN_TELEGRAM_ID)] = flow; writeStore(store);
+      await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: "📆 ابعت تاريخ انتهاء الاشتراك بصيغة يوم/شهر/سنة، مثال: 1/4/2027" });
+    }
+  }
 }
 
 async function handleBusinessMessage(message) {
@@ -300,13 +521,18 @@ async function handleBusinessMessage(message) {
   if (!message.text) return;
   const text = message.text.trim();
   if (!text || text.startsWith("/")) return;
-  if (await handlePaymentTransactionNumber(message, text)) return;
+  if (await handlePaymentForm(message, text)) return;
   if (await handleTrialFlow(message, text)) return;
   const found = store.replies.filter(r => r.enabled !== false && r.keyword && normalize(text).includes(normalize(r.keyword)))
     .sort((a, b) => normalize(b.keyword).length - normalize(a.keyword).length)[0];
   const reply = found ? found.reply : store.defaultReply;
   if (!reply || !reply.trim()) return;
   await telegram("sendMessage", { business_connection_id: message.business_connection_id, chat_id: message.chat.id, text: reply });
+}
+async function handleRegularMessage(message) {
+  if (!message || !message.from || message.from.is_bot) return;
+  if (String(message.from.id) !== String(ADMIN_TELEGRAM_ID) || !message.text) return;
+  await handlePaymentAdminText(message, message.text.trim());
 }
 
 app.get("/", (_req, res) => res.send("Drosak Plus Auto Reply is running."));
@@ -349,6 +575,8 @@ app.post(`/telegram/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       writeStore(store);
     }
     if (update.business_message) await handleBusinessMessage(update.business_message);
+    if (update.message) await handleRegularMessage(update.message);
+    if (update.callback_query) await handlePaymentCallback(update.callback_query);
   } catch (err) { console.error("Update handling error:", err.message); }
 });
 
@@ -369,7 +597,7 @@ app.put("/api/replies", (req, res) => {
   const defaultReply = String(body.defaultReply || "").trim().slice(0, 4000);
   const photoReply = String(body.photoReply || "").trim().slice(0, 4000);
   const previous = readStore();
-  writeStore({ replies, defaultReply, photoReply, businessOwnerId: previous.businessOwnerId || "", paymentPending: previous.paymentPending || {}, paymentRecords: previous.paymentRecords || [] });
+  writeStore({ replies, defaultReply, photoReply, businessOwnerId: previous.businessOwnerId || "", paymentPending: previous.paymentPending || {}, paymentRecords: previous.paymentRecords || [], paymentAdminFlows: previous.paymentAdminFlows || {} });
   res.json({ ok: true, count: replies.length });
 });
 
@@ -381,7 +609,7 @@ app.listen(PORT, async () => {
       await telegram("setWebhook", {
         url: `https://${PUBLIC_DOMAIN}/telegram/webhook/${WEBHOOK_SECRET}`,
         secret_token: WEBHOOK_SECRET,
-        allowed_updates: ["business_message", "business_connection"]
+        allowed_updates: ["business_message", "business_connection", "message", "callback_query"]
       });
       console.log("Telegram webhook configured.");
     } catch (err) { console.error("Could not configure Telegram webhook:", err.message); }
