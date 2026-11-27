@@ -27,14 +27,25 @@
   <main class="layout"><div class="welcome"><div><h1>لوحة إدارة الردود</h1><p>أهلاً بيك! أضف وعدّل ردود البوت بكل سهولة.</p></div><button class="primary" id="newReplyBtn">＋ إضافة رد جديد</button></div>
     <div class="stat-grid"><div class="stat"><div class="stat-icon">✉</div><div><small>إجمالي الردود</small><strong id="totalCount">0</strong></div></div><div class="stat"><div class="stat-icon">✓</div><div><small>ردود مفعّلة</small><strong id="activeCount">0</strong></div></div><div class="stat"><div class="stat-icon">⏸</div><div><small>ردود متوقفة</small><strong id="pausedCount">0</strong></div></div></div>
     <div class="content-grid"><section class="panel"><div class="panel-head"><div><h2>الردود المحفوظة</h2><p>أطول كلمة مفتاحية مطابقة هي اللي بتحدد الرد</p></div></div><div class="panel-body"><div class="searchbar"><span>⌕</span><input class="control" id="search" placeholder="ابحث عن كلمة أو رسالة..."></div><div id="replyList" class="reply-list"><div class="empty">جاري تحميل الردود...</div></div></div></section>
-      <aside class="panel side-panel"><div class="panel-head"><div><h2>الرد الافتراضي</h2><p>للرسائل اللي مفيش لها كلمة مفتاحية</p></div></div><div class="panel-body"><div class="tip">💡 الرد ده اختياري. سيبه فاضي لو مش عايز البوت يرد على الرسائل غير المطابقة.</div><label class="field" for="defaultReply" style="margin-top:0"><span style="font-size:13px;font-weight:800">نص الرد</span></label><textarea class="control" id="defaultReply" placeholder="مثلاً: أهلاً بيك في دروسك بلس، اكتب كلمة اشتراك لمعرفة الباقات..."></textarea><div class="form-hint">تقدر تستخدم أسطر متعددة. الحد الأقصى 4000 حرف.</div><div class="save-row"><button class="primary" id="saveDefault">حفظ الرد</button><button class="mini gray" id="clearDefault">مسح</button></div></div><div style="height:16px"></div><div class="panel-head" style="border:1px solid #f0f2f8;border-radius:13px 13px 0 0"><div><h2>📷 الرد على الصور</h2><p>أي طالب يبعت صورة، البوت يرد عليه بالرسالة دي</p></div></div><div style="border:1px solid #f0f2f8;border-top:0;border-radius:0 0 13px 13px;padding:16px"><textarea class="control" id="photoReply" placeholder="مثلاً: وصلت الصورة، هراجعها وأرد عليك قريبًا..."></textarea><div class="form-hint">سيتم إرسال الرد تلقائيًا عند استلام صورة. سيبه فاضي لو مش عايز رد على الصور.</div><div class="save-row"><button class="primary" id="savePhotoReply">حفظ رد الصور</button><button class="mini gray" id="clearPhotoReply">مسح</button></div></div></aside>
+      <aside class="panel side-panel"><div class="panel-head"><div><h2>الرد الافتراضي</h2><p>للرسائل اللي مفيش لها كلمة مفتاحية</p></div></div><div class="panel-body"><div class="tip">💡 الرد ده اختياري. سيبه فاضي لو مش عايز البوت يرد على الرسائل غير المطابقة.</div><label class="field" for="defaultReply" style="margin-top:0"><span style="font-size:13px;font-weight:800">نص الرد</span></label><textarea class="control" id="defaultReply" placeholder="مثلاً: أهلاً بيك في دروسك بلس، اكتب كلمة اشتراك لمعرفة الباقات..."></textarea><div class="form-hint">تقدر تستخدم أسطر متعددة. الحد الأقصى 4000 حرف.</div><div class="save-row"><button class="primary" id="saveDefault">حفظ الرد</button><button class="mini gray" id="clearDefault">مسح</button></div></div><div style="height:16px"></div><div class="panel-head" style="border:1px solid #f0f2f8;border-radius:13px 13px 0 0"><div><h2>📷 الرد على الصور</h2><p>لو كتبت رد هنا، البوت يرسله مع الصورة؛ اتركه فارغًا لو هترد بنفسك من الموبايل</p></div></div><div style="border:1px solid #f0f2f8;border-top:0;border-radius:0 0 13px 13px;padding:16px"><textarea class="control" id="photoReply" placeholder="مثلاً: وصلت الصورة، هراجعها وأرد عليك قريبًا..."></textarea><div class="form-hint">سيتم إرسال الرد فقط إذا كتبت نصًا هنا. اتركه فارغًا لو هترد بنفسك على الصورة من حساب تيليجرام.</div><div class="save-row"><button class="primary" id="savePhotoReply">حفظ رد الصور</button><button class="mini gray" id="clearPhotoReply">مسح</button></div></div></aside>
+      <section class="panel" style="margin-top:20px">
+        <div class="panel-head"><div><h2>🖼️ ردود الصور المرجعية</h2><p>ارفع صورة وحدد الرد؛ البوت يقارن الصور الواردة بها عند تفعيل تحليل الصور</p></div></div>
+        <div class="panel-body">
+          <div class="field"><label for="imageReplyLabel">اسم الصورة أو وصفها</label><input class="control" id="imageReplyLabel" maxlength="100" placeholder="مثلاً: صورة باقات الاشتراك"></div>
+          <div class="field"><label for="imageReplyFile">الصورة المرجعية</label><input class="control" id="imageReplyFile" type="file" accept="image/*"></div>
+          <div class="field"><label for="imageReplyText">الرد اللي يبعته البوت لو لقى صورة مشابهة</label><textarea class="control" id="imageReplyText" maxlength="4000" placeholder="اكتب الرد هنا..."></textarea></div>
+          <button class="primary" id="addImageReply" type="button">＋ حفظ صورة وردها</button>
+          <div class="form-hint">الحد الأقصى 6 صور مرجعية. الصورة بتتصغر قبل الحفظ. مطابقة الصور تحتاج OPENAI_API_KEY، والمطابقة مجرد اختيار رد وليست تأكيدًا لأي تحويل.</div>
+          <div id="imageReplyList" class="reply-list" style="margin-top:15px"></div>
+        </div>
+      </section>
     </div><div class="foot">دروسك بلس • إدارة الردود الآلية</div>
   </main>
 </section>
 <div id="editModal" class="modal-back hidden"><div class="modal"><h3 id="modalTitle">إضافة رد جديد</h3><div class="field"><label for="editKeyword">الكلمة أو العبارة المفتاحية</label><input class="control" id="editKeyword" maxlength="100" placeholder="مثال: اشتراك أو سعر الباقة"></div><div class="field"><label for="editReply">الرسالة اللي هتتبعت</label><textarea class="control" id="editReply" maxlength="4000" placeholder="اكتب الرد بالتفصيل..."></textarea><div class="form-hint"><span id="charCount">0</span> / 4000 حرف</div></div><div class="modal-actions"><button class="primary" id="modalSave">حفظ الرد</button><button class="mini gray" id="modalCancel">إلغاء</button></div><div class="msg" id="modalMsg"></div></div></div>
 <div class="toast" id="toast" role="status"></div>
 <script>
-const $=id=>document.getElementById(id);let store={replies:[],defaultReply:'',photoReply:''};let editingId=null;let busy=false;let toastTimer;
+const $=id=>document.getElementById(id);let store={replies:[],defaultReply:'',photoReply:'',imageReplies:[]};let editingId=null;let busy=false;let toastTimer;
 function toast(msg){$('toast').textContent=msg;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600)}
 async function api(url,options={}){const r=await fetch(url,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});let body={};try{body=await r.json()}catch{}if(!r.ok){if(r.status===401&&url!='/api/login')showLogin();throw new Error(body.error||'حصل خطأ، حاول مرة تانية')}return body}
 function showLogin(){$('dashboard').classList.add('hidden');$('loginView').classList.remove('hidden')}
@@ -42,7 +53,7 @@ function showDashboard(){$('loginView').classList.add('hidden');$('dashboard').c
 async function checkSession(){try{const s=await api('/api/session');if(s.authenticated){showDashboard();await loadStore()}else showLogin()}catch{showLogin()}}
 async function login(e){e.preventDefault();if(busy)return;busy=true;$('loginBtn').disabled=true;$('loginBtn').textContent='جاري تسجيل الدخول...';$('loginMsg').textContent='';try{await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})});$('password').value='';showDashboard();await loadStore();toast('تم تسجيل الدخول بنجاح')}catch(err){$('loginMsg').textContent=err.message}finally{busy=false;$('loginBtn').disabled=false;$('loginBtn').innerHTML='دخول لوحة التحكم <span>←</span>'}}
 async function logout(){try{await api('/api/logout',{method:'POST',body:'{}'})}catch{}showLogin();toast('تم تسجيل الخروج')}
-async function loadStore(){store=await api('/api/replies');store.replies=Array.isArray(store.replies)?store.replies:[];$('defaultReply').value=store.defaultReply||'';$('photoReply').value=store.photoReply||'';render()}
+async function loadStore(){store=await api('/api/replies');store.replies=Array.isArray(store.replies)?store.replies:[];$('defaultReply').value=store.defaultReply||'';$('photoReply').value=store.photoReply||'';store.imageReplies=Array.isArray(store.imageReplies)?store.imageReplies:[];render();renderImageReplies()}
 function render(){const q=$('search').value.trim().toLocaleLowerCase();const active=store.replies.filter(x=>x.enabled!==false).length;$('totalCount').textContent=store.replies.length;$('activeCount').textContent=active;$('pausedCount').textContent=store.replies.length-active;const list=$('replyList');list.innerHTML='';const items=store.replies.filter(x=>(x.keyword+' '+x.reply).toLocaleLowerCase().includes(q));if(!items.length){list.innerHTML='<div class="empty"><b>'+ (q?'مش لاقيين نتيجة':'لسه مفيش ردود')+'</b>'+(q?'جرّب كلمة بحث تانية.':'اضغط على إضافة رد جديد وابدأ جهّز الردود التلقائية.')+'</div>';return}items.forEach(item=>{const card=document.createElement('article');card.className='reply-card';const top=document.createElement('div');top.className='reply-top';const keyword=document.createElement('div');keyword.className='keyword';keyword.textContent=item.keyword;const pill=document.createElement('span');pill.className='pill'+(item.enabled===false?' off':'');pill.textContent=item.enabled===false?'متوقف':'مفعّل';top.append(keyword,pill);const text=document.createElement('div');text.className='reply-text';text.textContent=item.reply;const actions=document.createElement('div');actions.className='reply-actions';const edit=button('✎ تعديل','mini',()=>openModal(item));const toggle=button(item.enabled===false?'▶ تفعيل':'Ⅱ إيقاف','mini gray',()=>toggleReply(item.id));const del=button('⌫ حذف','mini red',()=>deleteReply(item.id));actions.append(edit,toggle,del);card.append(top,text,actions);list.append(card)})}
 function button(label,cls,fn){const b=document.createElement('button');b.className=cls;b.type='button';b.textContent=label;b.onclick=fn;return b}
 async function persist(){try{await api('/api/replies',{method:'PUT',body:JSON.stringify(store)});await loadStore();toast('اتحفظت التعديلات بنجاح')}catch(e){toast(e.message)}}
@@ -51,6 +62,46 @@ function closeModal(){$('editModal').classList.add('hidden')}
 async function saveModal(){const keyword=$('editKeyword').value.trim(),reply=$('editReply').value.trim();if(!keyword||!reply){$('modalMsg').textContent='اكتب الكلمة المفتاحية والرد الأول';return}if(editingId){const item=store.replies.find(x=>x.id===editingId);if(item){item.keyword=keyword;item.reply=reply}}else store.replies.unshift({id:Date.now().toString(),keyword,reply,enabled:true});closeModal();await persist()}
 async function toggleReply(id){const item=store.replies.find(x=>x.id===id);if(!item)return;item.enabled=item.enabled===false;await persist()}
 async function deleteReply(id){const item=store.replies.find(x=>x.id===id);if(!item||!confirm('متأكد إنك عايز تحذف الرد الخاص بـ «'+item.keyword+'»؟'))return;store.replies=store.replies.filter(x=>x.id!==id);await persist()}
-$('loginForm').addEventListener('submit',login);$('showPass').onclick=()=>{$('password').type=$('password').type==='password'?'text':'password'};$('logoutBtn').onclick=logout;$('newReplyBtn').onclick=()=>openModal();$('modalCancel').onclick=closeModal;$('modalSave').onclick=saveModal;$('editReply').addEventListener('input',()=>$('charCount').textContent=$('editReply').value.length);$('search').addEventListener('input',render);$('saveDefault').onclick=async()=>{store.defaultReply=$('defaultReply').value.trim();await persist()};$('clearDefault').onclick=()=>{$('defaultReply').value='';store.defaultReply='';persist()};$('savePhotoReply').onclick=async()=>{store.photoReply=$('photoReply').value.trim();await persist()};$('clearPhotoReply').onclick=()=>{$('photoReply').value='';store.photoReply='';persist()};$('editModal').addEventListener('click',e=>{if(e.target===$('editModal'))closeModal()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});checkSession();
+
+function renderImageReplies(){
+  const list=$('imageReplyList');if(!list)return;list.innerHTML='';
+  const items=store.imageReplies||[];
+  if(!items.length){list.innerHTML='<div class="empty">لسه مفيش صور مرجعية محفوظة.</div>';return}
+  items.forEach(item=>{
+    const card=document.createElement('article');card.className='reply-card';
+    const top=document.createElement('div');top.className='reply-top';
+    const title=document.createElement('div');title.className='keyword';title.textContent=item.label||'صورة مرجعية';
+    const pill=document.createElement('span');pill.className='pill';pill.textContent='مفعّل';top.append(title,pill);
+    const img=document.createElement('img');img.src=item.imageData;img.alt=item.label||'صورة مرجعية';img.style='max-width:130px;max-height:100px;object-fit:contain;border-radius:10px';
+    const reply=document.createElement('div');reply.className='reply-text';reply.textContent=item.reply;
+    const actions=document.createElement('div');actions.className='reply-actions';
+    actions.append(button('⌫ حذف الصورة والرد','mini red',async()=>{if(!confirm('تحذف الصورة والرد المرتبط بيها؟'))return;store.imageReplies=store.imageReplies.filter(x=>x.id!==item.id);await persist()}));
+    card.append(top,img,reply,actions);list.append(card)
+  })
+}
+async function compressImage(file){
+  const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)});
+  const img=await new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=reject;image.src=dataUrl});
+  const canvas=document.createElement('canvas');const scale=Math.min(1,900/Math.max(img.width,img.height));canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);
+  canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+  let quality=.72,result=canvas.toDataURL('image/jpeg',quality);
+  while(result.length>450000&&quality>.35){quality-=.08;result=canvas.toDataURL('image/jpeg',quality)}
+  return result
+}
+async function addImageReply(){
+  const file=$('imageReplyFile').files[0],label=$('imageReplyLabel').value.trim(),reply=$('imageReplyText').value.trim();
+  if(!file||!reply){toast('اختار صورة واكتب الرد المرتبط بيها');return}
+  if((store.imageReplies||[]).length>=6){toast('وصلت للحد الأقصى: 6 صور مرجعية');return}
+  const btn=$('addImageReply');btn.disabled=true;btn.textContent='جاري تجهيز الصورة...';
+  try{
+    const imageData=await compressImage(file);
+    store.imageReplies=store.imageReplies||[];
+    store.imageReplies.unshift({id:Date.now().toString(),label:label||file.name.slice(0,90),reply,imageData,enabled:true});
+    await persist();
+    $('imageReplyLabel').value='';$('imageReplyText').value='';$('imageReplyFile').value='';
+  }catch(e){toast('تعذر تجهيز الصورة: '+e.message)}
+  finally{btn.disabled=false;btn.textContent='＋ حفظ صورة وردها'}
+}
+$('addImageReply')?.addEventListener('click',addImageReply);$('loginForm').addEventListener('submit',login);$('showPass').onclick=()=>{$('password').type=$('password').type==='password'?'text':'password'};$('logoutBtn').onclick=logout;$('newReplyBtn').onclick=()=>openModal();$('modalCancel').onclick=closeModal;$('modalSave').onclick=saveModal;$('editReply').addEventListener('input',()=>$('charCount').textContent=$('editReply').value.length);$('search').addEventListener('input',render);$('saveDefault').onclick=async()=>{store.defaultReply=$('defaultReply').value.trim();await persist()};$('clearDefault').onclick=()=>{$('defaultReply').value='';store.defaultReply='';persist()};$('savePhotoReply').onclick=async()=>{store.photoReply=$('photoReply').value.trim();await persist()};$('clearPhotoReply').onclick=()=>{$('photoReply').value='';store.photoReply='';persist()};$('editModal').addEventListener('click',e=>{if(e.target===$('editModal'))closeModal()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});checkSession();
 </script>
 </body></html>
