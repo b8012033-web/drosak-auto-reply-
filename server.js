@@ -71,7 +71,7 @@ if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
 
 function ensureStore() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: DEFAULT_REPLIES, builtInRepliesSeeded: true, defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, imageReplies: [] }, null, 2));
+  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: DEFAULT_REPLIES, builtInRepliesSeeded: true, defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [] }, null, 2));
 }
 function readStore() {
   ensureStore();
@@ -95,9 +95,10 @@ function readStore() {
     if (!data.paymentAdminFlows || typeof data.paymentAdminFlows !== "object") data.paymentAdminFlows = {};
     if (!data.photoContext || typeof data.photoContext !== "object") data.photoContext = {};
     if (!data.contactFlow || typeof data.contactFlow !== "object") data.contactFlow = {};
+    if (!data.contactTickets || typeof data.contactTickets !== "object") data.contactTickets = {};
     if (!Array.isArray(data.imageReplies)) data.imageReplies = [];
     return data;
-  } catch { return { replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, imageReplies: [] }; }
+  } catch { return { replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [] }; }
 }
 function writeStore(data) {
   ensureStore();
@@ -320,13 +321,13 @@ async function matchSavedImageReply(buffer, imageReplies) {
   const candidates = imageReplies.filter(x => x && x.imageData && x.reply && x.enabled !== false).slice(0, 6);
   if (!candidates.length) return null;
   const content = [
-    { type: "text", text: "الصورة الأولى هي صورة الطالب. الصور التالية صور مرجعية أضافها مسؤول البوت. حدد هل صورة الطالب مطابقة أو قريبة بصريًا بوضوح من إحدى الصور المرجعية. لا تخمن. أعد JSON فقط بالشكل {match_index: رقم يبدأ من 0 أو null, confidence: رقم من 0 إلى 100}. لا تعتبر إيصال التحويل صحيحًا ولا تتحقق من الدفع." },
-    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${buffer.toString("base64")}`, detail: "low" } }
+    { type: "text", text: `الصورة الأولى هي صورة الطالب، وبعدها صور مرجعية رفعها الأدمن. قارن الشكل والمحتوى المرئي للصورة الأولى بكل صورة مرجعية، واختر أقرب صورة مطابقة فقط إذا كان التشابه واضحًا. لا تعتمد على أسماء الصور وحدها ولا تخمن. أعد JSON فقط بالشكل {"match_index": رقم الصورة المرجعية من 0 إلى عدد الصور ناقص 1 أو null, "confidence": رقم من 0 إلى 100}. إذا لا توجد مطابقة واضحة اجعل match_index null والثقة أقل من 70.` },
+    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${buffer.toString("base64")}`, detail: "high" } }
   ];
   for (let i = 0; i < candidates.length; i++) {
     const data = String(candidates[i].imageData);
-    content.push({ type: "text", text: `الصورة المرجعية رقم ${i}` });
-    content.push({ type: "image_url", image_url: { url: data.startsWith("data:") ? data : `data:image/jpeg;base64,${data}`, detail: "low" } });
+    content.push({ type: "text", text: `المرجع ${i}: ${String(candidates[i].label || "صورة مرجعية").slice(0, 100)}` });
+    content.push({ type: "image_url", image_url: { url: data.startsWith("data:") ? data : `data:image/jpeg;base64,${data}`, detail: "high" } });
   }
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -334,16 +335,23 @@ async function matchSavedImageReply(buffer, imageReplies) {
     body: JSON.stringify({
       model: "gpt-4o-mini",
       response_format: { type: "json_object" },
-      messages: [{ role: "user", content }],
-      max_tokens: 100
+      messages: [
+        { role: "system", content: "أنت نظام مطابقة صور. أعد JSON صحيحًا فقط. match_index يجب أن يكون رقمًا صحيحًا يبدأ من صفر أو null. لا تختر صورة إذا لم تكن مطابقة بصريًا بوضوح." },
+        { role: "user", content }
+      ],
+      max_tokens: 120
     })
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error?.message || `Image matching failed ${response.status}`);
-  const result = JSON.parse(data.choices?.[0]?.message?.content || "{}");
+  const raw = data.choices?.[0]?.message?.content || "{}";
+  let result;
+  try { result = JSON.parse(raw); } catch { throw new Error("Image matcher returned invalid JSON"); }
+  // Avoid Number(null) => 0, which could incorrectly match the first reference.
+  if (result.match_index === null || result.match_index === undefined || result.match_index === "null" || result.match_index === "") return null;
   const index = Number(result.match_index);
   const confidence = Math.max(0, Math.min(100, Number(result.confidence) || 0));
-  if (!Number.isInteger(index) || index < 0 || index >= candidates.length || confidence < 78) return null;
+  if (!Number.isInteger(index) || index < 0 || index >= candidates.length || confidence < 70) return null;
   return candidates[index];
 }
 async function handlePaymentPhoto(message) {
@@ -401,7 +409,15 @@ async function handlePaymentPhoto(message) {
   };
   writeStore(store);
   const responseText = String(store.photoReply || "").trim();
-  if (responseText) await sendBusinessText(message, responseText);
+  if (responseText) {
+    await sendBusinessText(message, responseText);
+  } else if (Array.isArray(store.imageReplies) && store.imageReplies.length) {
+    if (!OPENAI_API_KEY) {
+      await sendBusinessText(message, "وصلت الصورة 📷 لكن التعرف التلقائي على الصور مش مفعّل حاليًا. الأدمن يقدر يراجعها ويرد عليك هنا.");
+    } else {
+      await sendBusinessText(message, "وصلت الصورة 📷 لو محتاج مساعدة بخصوصها، اكتب سؤالك أو تواصل مع الإدارة.");
+    }
+  }
 }
 
 function isPaymentIntent(text) {
@@ -755,31 +771,100 @@ function isContactIntent(text) {
 async function handleContactFlow(message, text) {
   const key = trialKey(message);
   const store = readStore();
+  store.contactTickets = store.contactTickets && typeof store.contactTickets === "object" ? store.contactTickets : {};
   const pending = store.contactFlow[key];
-  if (!pending && isContactIntent(text)) {
-    store.contactFlow[key] = {
-      businessConnectionId: message.business_connection_id,
-      chatId: String(message.chat.id),
-      telegramUserId: String(message.from?.id || message.chat.id),
-      createdAt: Date.now()
-    };
+
+  // Let the student finish the first contact form before applying the one-ticket lock.
+  if (pending) {
+    if (isContactIntent(text)) {
+      await sendBusinessText(message, "📩 طلب التواصل اتفتح بالفعل. ابعت كود الاشتراك أو اكتب «مش معايا» علشان أوصل طلبك للإدارة مرة واحدة بس ❤️");
+      const ticket = store.contactTickets[key];
+      if (ticket && Date.now() - Number(ticket.lastAdminNoticeAt || 0) >= 5 * 60 * 1000) {
+        await telegram("sendMessage", {
+          chat_id: ADMIN_TELEGRAM_ID,
+          text: `⏳ الطالب بدأ طلب تواصل بالفعل ويحاول إعادة الطلب قبل وصول رد الإدارة.
+🆔 Telegram ID: ${ticket.telegramUserId}
+يرجى التواصل معه.`,
+          reply_markup: { inline_keyboard: [[{ text: "👤 عرض حساب الطالب", url: `tg://user?id=${ticket.telegramUserId}` }]] }
+        });
+        ticket.lastAdminNoticeAt = Date.now();
+        store.contactTickets[key] = ticket;
+        writeStore(store);
+      }
+      return true;
+    }
+    const value = String(text || "").trim().slice(0, 120);
+    const noCode = /(مش معايا|مش معاي|مش مشترك|لسه مشترك|لسه مشتركتش|بدون كود|من غير كود)/i.test(normalize(value));
+    const code = noCode ? "" : value;
+    const adminText = `📩 طلب تواصل جديد مع الإدارة\n🆔 Telegram ID: ${pending.telegramUserId}\n🔑 كود الطالب: ${code || "لا يوجد / غير مشترك"}\n💬 الحالة: الطالب طلب التواصل وينتظر رد الإدارة.\n\nبعد الرد على الطالب من حساب تيليجرام المرتبط، سيسمح له بفتح طلب جديد.`;
+    await telegram("sendMessage", {
+      chat_id: ADMIN_TELEGRAM_ID,
+      text: adminText,
+      reply_markup: { inline_keyboard: [[{ text: "👤 عرض حساب الطالب", url: `tg://user?id=${pending.telegramUserId}` }]] }
+    });
+    delete store.contactFlow[key];
+    const ticket = store.contactTickets[key] || {};
+    store.contactTickets[key] = { ...ticket, status: "pending", telegramUserId: pending.telegramUserId, businessConnectionId: pending.businessConnectionId, chatId: pending.chatId, openedAt: ticket.openedAt || Date.now(), lastAdminNoticeAt: Date.now() };
     writeStore(store);
-    await sendBusinessText(message, "أكيد ❤️ ابعت كود الاشتراك بتاعك علشان الإدارة تعرف توصل لحسابك. لو مش معاك كود أو مش مشترك، اكتب «مش معايا».");
+    await sendBusinessText(message, "تمام ❤️ بعت طلبك للإدارة. طلبك جاري بالفعل، والإدارة هتتواصل معاك. تقدر تبعت طلب تواصل جديد بعد ما الإدارة ترد عليك.");
     return true;
   }
-  if (!pending) return false;
-  const value = String(text || "").trim().slice(0, 120);
-  const noCode = /(مش معايا|مش معاي|مش مشترك|لسه مشترك|لسه مشتركتش|بدون كود|من غير كود)/i.test(normalize(value));
-  const code = noCode ? "" : value;
-  const adminText = `📩 طلب تواصل مع الإدارة\n🆔 Telegram ID: ${pending.telegramUserId}\n🔑 كود الطالب: ${code || "لا يوجد / غير مشترك"}\n💬 الرسالة: ${noCode ? "الطالب لا يملك كودًا أو غير مشترك" : "الطالب طلب التواصل مع الإدارة"}\n\nافتح حساب الطالب من الزر بالأسفل وتواصل معه يدويًا.`;
-  await telegram("sendMessage", {
-    chat_id: ADMIN_TELEGRAM_ID,
-    text: adminText,
-    reply_markup: { inline_keyboard: [[{ text: "👤 عرض حساب الطالب", url: `tg://user?id=${pending.telegramUserId}` }]] }
-  });
-  delete store.contactFlow[key];
+
+  if (!isContactIntent(text)) return false;
+  const ticket = store.contactTickets[key];
+  if (ticket?.status === "pending") {
+    await sendBusinessText(message, "📩 طلبك جاري بالفعل، والإدارة هتتواصل معاك أول ما تقدر. مش محتاج تبعت طلب تاني دلوقتي ❤️");
+    // Avoid repeatedly flooding the admin; remind at most once every 5 minutes.
+    if (Date.now() - Number(ticket.lastAdminNoticeAt || 0) >= 5 * 60 * 1000) {
+      await telegram("sendMessage", {
+        chat_id: ADMIN_TELEGRAM_ID,
+        text: `⏳ الطالب منتظر بالفعل رد الإدارة وحاول التواصل مرة أخرى.\n🆔 Telegram ID: ${ticket.telegramUserId}\n\nيرجى التواصل معه لإنهاء الطلب.`,
+        reply_markup: { inline_keyboard: [[{ text: "👤 عرض حساب الطالب", url: `tg://user?id=${ticket.telegramUserId}` }]] }
+      });
+      ticket.lastAdminNoticeAt = Date.now();
+      store.contactTickets[key] = ticket;
+      writeStore(store);
+    }
+    return true;
+  }
+
+  store.contactFlow[key] = {
+    businessConnectionId: message.business_connection_id,
+    chatId: String(message.chat.id),
+    telegramUserId: String(message.from?.id || message.chat.id),
+    createdAt: Date.now()
+  };
+  // Lock the ticket immediately, so a second contact request cannot create another open ticket.
+  store.contactTickets[key] = {
+    status: "pending",
+    businessConnectionId: message.business_connection_id,
+    chatId: String(message.chat.id),
+    telegramUserId: String(message.from?.id || message.chat.id),
+    openedAt: Date.now(),
+    lastAdminNoticeAt: 0
+  };
   writeStore(store);
-  await sendBusinessText(message, "تمام ❤️ بعت طلبك للإدارة، وهيتم التواصل معاك في أقرب وقت.");
+  await sendBusinessText(message, "أكيد ❤️ هفتحلك طلب تواصل مع الإدارة. ابعت كود الاشتراك بتاعك علشان الإدارة تعرف توصل لحسابك، ولو مش معاك كود أو مش مشترك اكتب «مش معايا».");
+  return true;
+}
+
+async function resolveContactTicketOnOwnerReply(message, store) {
+  const key = trialKey(message);
+  const ticket = store.contactTickets?.[key];
+  if (!ticket || ticket.status !== "pending") return false;
+  ticket.status = "responded";
+  ticket.respondedAt = Date.now();
+  if (store.contactFlow) delete store.contactFlow[key];
+  ticket.lastAdminReplyMessageId = message.message_id || null;
+  store.contactTickets[key] = ticket;
+  writeStore(store);
+  try {
+    await telegram("sendMessage", {
+      business_connection_id: message.business_connection_id,
+      chat_id: message.chat.id,
+      text: "✅ الإدارة ردّت على طلبك. لو محتاج تتواصل معاها تاني، تقدر تبعت طلب جديد دلوقتي."
+    });
+  } catch (e) { console.warn("Could not send contact-ticket resolved notice:", e.message); }
   return true;
 }
 async function handleBusinessMessage(message) {
@@ -788,6 +873,7 @@ async function handleBusinessMessage(message) {
   const store = readStore();
   const ownerId = store.businessOwnerId;
   if (ownerId && message.from && String(message.from.id) === String(ownerId)) {
+    await resolveContactTicketOnOwnerReply(message, store);
     await handleOwnerBusinessReply(message, store);
     return;
   }
@@ -913,13 +999,15 @@ app.put("/api/replies", (req, res) => {
     paymentRecords: previous.paymentRecords || [],
     paymentAdminFlows: previous.paymentAdminFlows || {},
     photoContext: previous.photoContext || {},
-    contactFlow: previous.contactFlow || {}
+    contactFlow: previous.contactFlow || {},
+    contactTickets: previous.contactTickets || {}
   });
   res.json({ ok: true, count: replies.length });
 });
 
 app.listen(PORT, async () => {
   console.log(`Auto reply server listening on ${PORT}`);
+  if (!OPENAI_API_KEY) console.warn("OPENAI_API_KEY is not set: admin reference-image matching is disabled.");
   ensureStore();
   if (PUBLIC_DOMAIN) {
     try {
