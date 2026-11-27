@@ -240,7 +240,24 @@ async function handlePaymentPhoto(message) {
     const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
     let analysis = { isReceipt: null, confidence: 0, provider: "غير محدد", warnings: "", visibleReference: "" };
     try { analysis = await analyzePaymentImage(buffer); }
-    catch (err) { console.warn("Payment image analysis skipped:", err.message); }
+    catch (err) {
+      console.warn("Payment image analysis failed:", err.message);
+      analysis = { isReceipt: null, confidence: 0, provider: "غير محدد", warnings: "تعذر تحليل الصورة", visibleReference: "" };
+    }
+
+    // لا نقبل الصورة كطلب تحويل إلا إذا صنّفها محلل الصور كإيصال محتمل بدرجة ثقة كافية.
+    // هذا لا يثبت وصول الفلوس؛ الإدارة تراجع التحويل فعليًا قبل تفعيل الاشتراك.
+    const minimumReceiptConfidence = Number(process.env.PAYMENT_RECEIPT_MIN_CONFIDENCE || 65);
+    if (analysis.isReceipt !== true || Number(analysis.confidence || 0) < minimumReceiptConfidence) {
+      await sendBusinessText(message,
+        "❌ الصورة دي مش واضحة كإيصال تحويل، فمش هسجلها كطلب دفع.\\n\\n" +
+        "لو دي صورة التحويل فعلًا، ابعت صورة واضحة يظهر فيها اسم خدمة التحويل وبيانات العملية. " +
+        "لو دي صورة عادية، ابعتها في رسالة منفصلة أو اكتب سؤالك.\\n\\n" +
+        "⚠️ تصنيف الصورة مش تأكيد للدفع؛ لازم الإدارة تتأكد من وصول المبلغ."
+      );
+      return;
+    }
+
     const store = readStore();
     store.paymentPending[key] = {
       fileId: bestPhoto.file_id, imageHash,
