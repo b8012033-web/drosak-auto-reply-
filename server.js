@@ -14,13 +14,38 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const PLATFORM_API_URL = String(process.env.PLATFORM_API_URL || "").replace(/\/$/, "");
 const BOT_TRIAL_SECRET = process.env.BOT_TRIAL_SECRET;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "7181451322";
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "9139960225";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const DATA_FILE = process.env.DATA_FILE || "/data/replies.json";
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 const sessions = new Map();
 const trialFlow = new Map();
 const SESSION_TTL = 12 * 60 * 60 * 1000;
+
+const DEFAULT_REPLIES = [
+  ["اهلا", "أهلًا بيك في دروسك بلس ❤️ اسألني عن التجربة أو الاشتراك أو المحاضرات."],
+  ["السلام عليكم", "وعليكم السلام ورحمة الله وبركاته ❤️ أهلًا بيك في دروسك بلس."],
+  ["الباقات", "أهلًا بيك ❤️ لمعرفة الباقات الحالية اكتب «عايز أشترك»، ولو حولت بالفعل اكتب «أنا دفعت» وابعت صورة التحويل."],
+  ["عايز اشترك", "تمام ❤️ اختار الباقة المناسبة من صفحة الاشتراك في المنصة. بعد التحويل اكتب «أنا دفعت» وابعت صورة الإيصال هنا."],
+  ["انا دفعت", "تمام ❤️ ابعت صورة إيصال التحويل هنا في الشات علشان نراجع طلب اشتراكك."],
+  ["انا حولت", "تمام ❤️ ابعت صورة إيصال التحويل هنا في الشات علشان نراجع طلب اشتراكك."],
+  ["تجربة", "علشان تاخد التجربة المجانية لمدة ساعة، ابعت اسمك بالكامل وهطلب منك الشعبة وبعدها هبعتلك الكود هنا."],
+  ["كود الدخول", "كود الدخول بيتبعت هنا بعد التجربة أو تفعيل الاشتراك. لو عندك مشكلة في الكود اكتب «التواصل مع الإدارة»."],
+  ["الكود مش شغال", "ابعت كودك واكتب «التواصل مع الإدارة» علشان نراجع حالة الحساب وعدد الأجهزة."],
+  ["نسيت الكود", "اكتب «التواصل مع الإدارة» وابعت بيانات حسابك أو رقم الطلب علشان نساعدك تسترجع الكود."],
+  ["انتهى الاشتراك", "لو اشتراكك انتهى، تقدر تجدد من صفحة الباقات. بعد التحويل اكتب «أنا دفعت» وابعت الإيصال."],
+  ["تجديد", "لتجديد الاشتراك، اختار الباقة المناسبة وبعد التحويل اكتب «أنا دفعت» وابعت صورة الإيصال."],
+  ["المحاضرات مش ظاهرة", "افتح الشعبة والقسم الصحيح. لو المحاضرة لسه مش ظاهرة ابعت اسم الشعبة والقسم واسم المحاضرة للدعم."],
+  ["الفيديو مش شغال", "جرّب تحديث الصفحة والتأكد من اتصال الإنترنت. لو المشكلة مستمرة ابعت اسم المحاضرة وصورة للمشكلة."],
+  ["الملف مش بيفتح", "جرّب فتح الملف من متصفح حديث أو تحميل قارئ PDF. لو المشكلة مستمرة ابعت اسم الملف وصورة للخطأ."],
+  ["الجدول", "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية لأي إعلان جديد."],
+  ["الامتحانات", "لو عندك مشكلة في اختبار، ابعت اسم الاختبار والشعبة وصورة للمشكلة علشان نراجعها."],
+  ["الشعبة", "المحتوى بيظهر حسب الشعبة المسجلة في حسابك. لو الشعبة غلط، اكتب «التواصل مع الإدارة» علشان نراجع بياناتك."],
+  ["عدد الأجهزة", "كود الاشتراك بيشتغل على عدد الأجهزة المحدد للحساب. لو وصلت للحد المسموح اكتب «التواصل مع الإدارة»."],
+  ["التواصل مع الادارة", "أكيد ❤️ ابعت كود الاشتراك بتاعك علشان الإدارة تعرف توصل لحسابك. لو مش معاك كود أو مش مشترك، اكتب «مش معايا»."],
+  ["شكرا", "العفو ❤️ بالتوفيق في دراستك، دروسك بلس معاك دايمًا."],
+  ["مواعيد", "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية لأي إعلان جديد."]
+].map(([keyword, reply], i) => ({ id: `builtin-${i + 1}`, keyword, reply, enabled: true }));
 
 if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
   console.error("Missing required environment variables: BOT_TOKEN, ADMIN_PASSWORD, WEBHOOK_SECRET");
@@ -29,13 +54,19 @@ if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
 
 function ensureStore() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, imageReplies: [] }, null, 2));
+  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: DEFAULT_REPLIES, builtInRepliesSeeded: true, defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, imageReplies: [] }, null, 2));
 }
 function readStore() {
   ensureStore();
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     if (!Array.isArray(data.replies)) data.replies = [];
+    if (data.builtInRepliesSeeded !== true) {
+      const existingIds = new Set(data.replies.map(r => String(r?.id || "")));
+      data.replies = [...data.replies, ...DEFAULT_REPLIES.filter(r => !existingIds.has(r.id))];
+      data.builtInRepliesSeeded = true;
+      writeStore(data);
+    }
     if (typeof data.defaultReply !== "string") data.defaultReply = "";
     if (typeof data.photoReply !== "string") data.photoReply = "";
     if (typeof data.businessOwnerId !== "string" && typeof data.businessOwnerId !== "number") data.businessOwnerId = "";
@@ -150,23 +181,40 @@ async function handleTrialFlow(message, text) {
       return true;
     }
     trialFlow.delete(key);
+    let code = "";
     try {
-      const code = await createTrialCode(state.name, section, message.from?.id);
-      const fullMessage = `🎉 أهلاً بيك في منصة دروسك بلس!\n\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 كود الدخول: ${code}\n\n🌟 هذا كود ساعة واحدة.\n\n💙 متنساش إن كل المدرسين اللي هتشوفهم في المنصة بـ200ج في الشهر.\n⭐ متنساش تقولنا رأيك في المنصة وتقول لأصحابك.\n\n🌐 رابط الدخول للمنصة:\nhttps://www.durosakplus.com/`;
-      await sendBusinessText(message, fullMessage, {
-        inline_keyboard: [
-          [{ text: "📋 نسخ الكود", copy_text: { text: code } }],
-          [{ text: "🌐 عرض الحساب", url: "https://www.durosakplus.com/" }]
-        ]
-      });
+      code = await createTrialCode(state.name, section, message.from?.id);
     } catch (err) {
       console.error("Trial code creation failed:", err.message);
       if (err.status === 409) {
-        await sendBusinessText(message, "معلش يا بطل ❤️\nإنت جربت قبل كده، والتجربة المجانية بتكون مرة واحدة بس لكل حساب، فمش هينفع تجرب تاني للأسف.\n\nهيبقى لازم تشترك. قولي بقى إنت عاوز تشترك في أنهي باقة؟");
+        await sendBusinessText(message, "معلش ❤️ التجربة المجانية متاحة مرة واحدة لكل حساب، ويظهر إنك استخدمتها قبل كده. لو محتاج اشتراك اكتب «عايز أشترك».");
       } else {
-        await sendBusinessText(message, "حصلت مشكلة أثناء إنشاء كود التجربة. جرّب بعد قليل أو تواصل مع الدعم.");
+        await sendBusinessText(message, "حصلت مشكلة أثناء إنشاء كود التجربة. جرّب بعد قليل أو اكتب «التواصل مع الإدارة».");
       }
+      return true;
     }
+
+    const fullMessage = `🎉 أهلاً بيك في منصة دروسك بلس!\n\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 كود الدخول: ${code}\n\n🌟 هذا كود ساعة واحدة.\n\n💙 احنا موجودين معاك دائمًا لو محتاج أي حاجة ابعتلنا.\n\n🌐 رابط الدخول للمنصة:\nhttps://www.durosakplus.com/`;
+    try {
+      await sendBusinessText(message, fullMessage, {
+        inline_keyboard: [
+          [{ text: "📋 نسخ الكود", copy_text: { text: code } }],
+          [{ text: "🌐 فتح المنصة", url: "https://www.durosakplus.com/" }]
+        ]
+      });
+    } catch (sendErr) {
+      console.error("Could not deliver trial code to student:", sendErr.message);
+      try { await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: `⚠️ تم إنشاء تجربة لكن تعذر إرسالها للطالب.\nالاسم: ${state.name}\nالشعبة: ${section}\nالكود: ${code}\nTelegram ID: ${message.from?.id || message.chat.id}\nالخطأ: ${sendErr.message}` }); } catch {}
+      return true;
+    }
+    // Admin notification is best-effort and must not make the student delivery look failed.
+    try {
+      await telegram("sendMessage", {
+        chat_id: ADMIN_TELEGRAM_ID,
+        text: `🎁 تجربة مجانية جديدة\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 الكود: ${code}\n🆔 Telegram ID: ${message.from?.id || message.chat.id}`,
+        reply_markup: { inline_keyboard: [[{ text: "👤 عرض حساب الطالب", url: `tg://user?id=${message.from?.id || message.chat.id}` }]] }
+      });
+    } catch (adminErr) { console.error("Trial admin notification failed:", adminErr.message); }
     return true;
   }
   trialFlow.delete(key);
@@ -219,7 +267,7 @@ async function notifyAdminPayment(record, photoFileId, duplicate) {
   const duplicateText = duplicate
     ? `\n🚨 تنبيه تكرار: نفس الصورة أو مرجع العملية سبق تسجيله. راجع الطلب قبل الموافقة.`
     : "";
-  const caption = `📥 طلب مراجعة تحويل جديد\n🧾 رقم الطلب: ${record.id}\n👤 الاسم: ${record.name || "غير متوفر"}\n📚 الشعبة: ${record.section || "غير متوفر"}\n📱 رقم التحويل منه: ${record.senderPhone || "غير متوفر"}\n🆔 Telegram ID: ${record.telegramUserId}\n🔢 مرجع العملية الظاهر: ${record.visibleReference || "غير ظاهر"}\n🏦 المصدر الظاهر: ${record.provider || "غير محدد"}\n🖼️ تشابه الصورة مع إيصال: ${record.receiptConfidence || 0}% (ليس إثباتًا لصحة الدفع)\n⚠️ ملاحظات الصورة: ${record.visualWarnings || "لا توجد"}${duplicateText}\n\nتأكد من وصول المبلغ فعليًا قبل تفعيل الاشتراك.`;
+  const caption = `📥 طلب مراجعة تحويل جديد\n🧾 رقم الطلب: ${record.id}\n👤 الاسم: ${record.name || "غير متوفر"}\n📚 الشعبة: ${record.section || "غير متوفر"}\n⏰ وقت التحويل: ${record.transferTime || "غير متوفر"}\n📱 رقم التحويل منه: ${record.senderPhone || "غير متوفر"}\n🆔 Telegram ID: ${record.telegramUserId}\n🔢 مرجع العملية الظاهر: ${record.visibleReference || "غير ظاهر"}\n🏦 المصدر الظاهر: ${record.provider || "غير محدد"}\n🖼️ تشابه الصورة مع إيصال: ${record.receiptConfidence || 0}% (ليس إثباتًا لصحة الدفع)\n⚠️ ملاحظات الصورة: ${record.visualWarnings || "لا توجد"}${duplicateText}\n\nتأكد من وصول المبلغ فعليًا قبل تفعيل الاشتراك.`;
   const reply_markup = { inline_keyboard: [
     [
       { text: "✅ تم الاستلام", callback_data: `pay:received:${record.id}` },
@@ -277,6 +325,34 @@ async function handlePaymentPhoto(message) {
   if (!bestPhoto?.file_id) return;
   const key = trialKey(message);
   const store = readStore();
+  const pending = store.paymentPending[key];
+
+  // If the student started a payment request, the receipt photo begins the real review flow.
+  if (pending?.step === "receipt") {
+    try {
+      const buffer = await getTelegramPhotoBuffer(bestPhoto.file_id);
+      let analysis = { isReceipt: null, confidence: 0, provider: "غير محدد", visibleReference: "", warnings: "لم يتم تحليل الصورة" };
+      try { analysis = await analyzePaymentImage(buffer); } catch (e) { console.warn("Payment image analysis failed:", e.message); }
+      pending.fileId = bestPhoto.file_id;
+      pending.imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
+      pending.provider = analysis.provider || "غير محدد";
+      pending.visibleReference = analysis.visibleReference || "";
+      pending.receiptConfidence = analysis.confidence || 0;
+      pending.visualWarnings = analysis.warnings || "";
+      pending.step = "time";
+      pending.createdAt = Date.now();
+      store.paymentPending[key] = pending;
+      writeStore(store);
+      await sendBusinessText(message, "وصلت صورة التحويل 📷\n\nالتحويل كان إمتى؟ اكتب مثلًا: النهارده، من ساعة، أو وقت التحويل التقريبي.");
+      return;
+    } catch (err) {
+      console.error("Payment receipt processing failed:", err.message);
+      await sendBusinessText(message, "حصلت مشكلة في استقبال الصورة. ابعتها تاني من فضلك.");
+      return;
+    }
+  }
+
+  // Reference-image replies are independent from payment processing.
   try {
     const buffer = await getTelegramPhotoBuffer(bestPhoto.file_id);
     const matched = await matchSavedImageReply(buffer, store.imageReplies);
@@ -287,7 +363,8 @@ async function handlePaymentPhoto(message) {
   } catch (err) {
     console.warn("Saved image reply matching failed:", err.message);
   }
-  // Keep the photo context so the account owner can reply directly to the student's photo.
+
+  // Keep context for the owner to manually reply to the student's photo.
   store.photoContext[key] = {
     fileId: bestPhoto.file_id,
     messageId: message.message_id,
@@ -300,6 +377,50 @@ async function handlePaymentPhoto(message) {
   const responseText = String(store.photoReply || "").trim();
   if (responseText) await sendBusinessText(message, responseText);
 }
+
+function isPaymentIntent(text) {
+  const n = normalize(text).replace(/[أإآ]/g, "ا");
+  return /(انا دفعت|دفعت|حولت|انا حولت|أنا حولت|تم التحويل|اشتركت|دفعت الفلوس|دفعت المبلغ|تم الدفع|عايز افعل|عاوز افعل|تفعيل اشتراك|تجديد اشتراك|فعل الاشتراك)/i.test(n);
+}
+async function handlePaymentIntent(message, text) {
+  const key = trialKey(message);
+  const store = readStore();
+  const current = store.paymentPending[key];
+  if (current && Date.now() - current.createdAt < 24 * 60 * 60 * 1000) {
+    if (current.step === "receipt") {
+      await sendBusinessText(message, "أنا معاك ❤️ ابعت صورة إيصال التحويل هنا علشان نكمل مراجعة الاشتراك.");
+      return true;
+    }
+    return false;
+  }
+  const normalized = normalize(text).replace(/[أإآ]/g, "ا");
+  if (/(سعر|بكام|كام|الباقات|الاسعار|عايز اعرف|عاوز اعرف)/.test(normalized)) return false;
+  if (!isPaymentIntent(text)) return false;
+  store.paymentPending[key] = {
+    step: "receipt",
+    businessConnectionId: message.business_connection_id,
+    chatId: String(message.chat.id),
+    telegramUserId: String(message.from?.id || message.chat.id),
+    createdAt: Date.now()
+  };
+  writeStore(store);
+  await sendBusinessText(message, "تمام ❤️ علشان نراجع اشتراكك، ابعت صورة إيصال التحويل هنا في الشات.\n\nبعد الصورة هسألك وقت التحويل ورقم التليفون والاسم والشعبة، وبعدها هبعت البيانات للإدارة.");
+  return true;
+}
+
+function builtInFaqReply(text) {
+  const n = normalize(text).replace(/[أإآ]/g, "ا");
+  if (/(ازاي|كيف).*(تجرب|تجربة)|تجربة مجانية|كود تجربة|عايز اجرب|عاوز اجرب/.test(n)) return "للتجربة المجانية اكتب «تجربة» أو «عايز أجرب»، وهطلب منك اسمك وشعبتك وبعدها أبعتلك كود التجربة هنا في الشات. التجربة متاحة مرة واحدة لكل حساب.";
+  if (/(سعر|بكام|كام|الاسعار|الباقات|اشتراك شهر|اشتراك سنه|اشتراك سنة)/.test(n)) return "أهلًا بيك ❤️ لمعرفة الباقات الحالية وتفاصيل الاشتراك اكتب «الباقات» أو «عايز أشترك»، ولو حولت بالفعل اكتب «أنا دفعت» وابعت صورة التحويل.";
+  if (/(مش شغال|مش شغاله|مش بيفتح|مش بيفتحش|عطل|مشكله|مشكلة|بيعلق|تحميل بطيء|مش ظاهر)/.test(n)) return "معلش على المشكلة ❤️ ابعت اسم القسم اللي فيه العطل وصورة للشاشة لو تقدر، واكتب «التواصل مع الإدارة» علشان نوصلك بالدعم.";
+  if (/(الكود|كود الدخول|نسيت الكود|الكود مش شغال|الكود منتهي)/.test(n)) return "كود الدخول بيتبعتلك هنا بعد التجربة أو تفعيل الاشتراك. لو الكود مش شغال، اكتب «التواصل مع الإدارة» وابعت كودك علشان نراجع الحساب.";
+  if (/(مدرس|المدرسين|المحاضرات|المحاضره|المحاضرة|الفيديو|الفيديوهات|الملفات|pdf|الملخصات|الكويز|الامتحان)/.test(n)) return "المحتوى بيتقسم حسب الشعبة والقسم داخل منصة دروسك بلس. افتح القسم المطلوب، ولو محاضرة ناقصة أو مش ظاهرة ابعت اسمها والشعبة للدعم.";
+  if (/(ميعاد|جدول|مواعيد|هينزل امتى|تنزل امتى|الجدول)/.test(n)) return "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية علشان أي إعلان جديد.";
+  if (/(تواصل|اكلم|كلم الادمن|الدعم|خدمة العملاء|محتاج مساعدة|عايز مساعدة|عاوز مساعدة)/.test(n)) return "أكيد ❤️ اكتب «التواصل مع الإدارة» وهطلب منك كود الاشتراك علشان نقدر نراجع حسابك ونوصل طلبك للمسؤول.";
+  if (/(شكرا|شكراً|تسلم|تمام|حبيبي|حلو)/.test(n)) return "العفو ❤️ بالتوفيق في دراستك، دروسك بلس معاك دايمًا.";
+  return null;
+}
+
 async function handlePaymentForm(message, text) {
   const key = trialKey(message);
   const store = readStore();
@@ -310,13 +431,8 @@ async function handlePaymentForm(message, text) {
   }
   const value = String(text || "").trim().slice(0, 150);
   if (pending.step === "time") {
-    const n = normalize(value);
-    const recent = /(النهارده|اليوم|انهارده|من شويه|من شوية|حالاً|حالا|دلوقتي|من ساعه|من ساعة|من ساعتين|من دقائق|من دقايق|من ربع ساعه|من نصف ساعه|من نص ساعه|today|just now|an hour ago)/i.test(n);
-    if (!recent) {
-      await sendBusinessText(message, "محتاج أعرف وقت التحويل بشكل أوضح. لو حولت النهارده أو من ساعة تقريبًا، اكتب «النهارده» أو «من ساعة». لو التحويل أقدم، اكتب وقت التحويل التقريبي وسيتم مراجعته يدويًا.");
-      pending.transferTime = value;
-      pending.createdAt = Date.now();
-      store.paymentPending[key] = pending; writeStore(store);
+    if (value.length < 2) {
+      await sendBusinessText(message, "اكتب وقت التحويل بشكل تقريبي، مثال: النهارده الساعة 5 أو من ساعة.");
       return true;
     }
     pending.transferTime = value;
@@ -365,6 +481,7 @@ async function handlePaymentForm(message, text) {
       name: pending.name,
       section: value.slice(0, 80),
       senderPhone: pending.senderPhone,
+      transferTime: pending.transferTime || "",
       telegramUserId: pending.telegramUserId,
       businessConnectionId: pending.businessConnectionId,
       chatId: pending.chatId,
@@ -579,7 +696,7 @@ async function handleOwnerBusinessReply(message, store) {
   if (!contextEntry) return false;
   const [key, ctx] = contextEntry;
   const text = normalize(message.text);
-  const transferIntent = /(اشتركتك|اشتراكك|دي رساله التحويل|دي رسالة التحويل|رساله التحويل|رسالة التحويل|انا حولت|أنا حولت|حولت|تم التحويل|تحويل)/i.test(text);
+  const transferIntent = /(اشتركتك|اشتراكك|دي رساله التحويل|دي رسالة التحويل|رساله التحويل|رسالة التحويل|انا دفعت|أنا دفعت|دفعت|انا حولت|أنا حولت|حولت|تم التحويل|تحويل)/i.test(text);
   if (!transferIntent) return false;
   store.paymentPending[key] = {
     fileId: ctx.fileId,
@@ -650,11 +767,13 @@ async function handleBusinessMessage(message) {
   if (!text || text.startsWith("/")) return;
   if (await handlePaymentForm(message, text)) return;
   if (await handleTrialFlow(message, text)) return;
+  if (await handleContactFlow(message, text)) return;
+  if (await handlePaymentIntent(message, text)) return;
   const found = store.replies.filter(r => r.enabled !== false && r.keyword && normalize(text).includes(normalize(r.keyword)))
     .sort((a, b) => normalize(b.keyword).length - normalize(a.keyword).length)[0];
-  const reply = found ? found.reply : store.defaultReply;
+  const reply = found ? found.reply : (builtInFaqReply(text) || store.defaultReply || "أهلًا بيك في دروسك بلس ❤️ اكتب «تجربة» للتجربة المجانية، أو «أنا دفعت» لمتابعة الاشتراك، أو «التواصل مع الإدارة» للدعم.");
   if (!reply || !reply.trim()) return;
-  await telegram("sendMessage", { business_connection_id: message.business_connection_id, chat_id: message.chat.id, text: reply });
+  await sendBusinessText(message, reply);
 }
 async function handleRegularMessage(message) {
   if (!message || !message.from || message.from.is_bot) return;
@@ -731,7 +850,7 @@ app.put("/api/replies", (req, res) => {
     enabled: x.enabled !== false
   })).filter(x => x.imageData && x.reply) : [];
   const previous = readStore();
-  writeStore({ ...previous, replies, defaultReply, photoReply, imageReplies,
+  writeStore({ ...previous, replies, builtInRepliesSeeded: true, defaultReply, photoReply, imageReplies,
     businessOwnerId: previous.businessOwnerId || "",
     paymentPending: previous.paymentPending || {},
     paymentRecords: previous.paymentRecords || [],
