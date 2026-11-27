@@ -9,12 +9,13 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "7181451322";
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const PLATFORM_API_URL = String(process.env.PLATFORM_API_URL || "").replace(/\/$/, "");
 const BOT_TRIAL_SECRET = process.env.BOT_TRIAL_SECRET;
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "7181451322";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const DATA_FILE = process.env.DATA_FILE || "/data/replies.json";
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 const sessions = new Map();
@@ -28,7 +29,7 @@ if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
 
 function ensureStore() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: [], defaultReply: "", photoReply: "" }, null, 2));
+  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [] }, null, 2));
 }
 function readStore() {
   ensureStore();
@@ -38,6 +39,8 @@ function readStore() {
     if (typeof data.defaultReply !== "string") data.defaultReply = "";
     if (typeof data.photoReply !== "string") data.photoReply = "";
     if (typeof data.businessOwnerId !== "string" && typeof data.businessOwnerId !== "number") data.businessOwnerId = "";
+    if (!data.paymentPending || typeof data.paymentPending !== "object") data.paymentPending = {};
+    if (!Array.isArray(data.paymentRecords)) data.paymentRecords = [];
     return data;
   } catch { return { replies: [], defaultReply: "", photoReply: "" }; }
 }
@@ -149,16 +152,6 @@ async function handleTrialFlow(message, text) {
       await sendBusinessText(message, fullMessage, {
         inline_keyboard: [[{ text: "📋 نسخ الكود", copy_text: { text: code } }]]
       });
-      // Notify the configured admin separately; an admin notification failure
-      // must not invalidate the student's successfully-created trial code.
-      try {
-        await telegram("sendMessage", {
-          chat_id: ADMIN_TELEGRAM_ID,
-          text: `🎟️ تم إنشاء كود تجربة جديد\n\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 الكود: ${code}\n⏳ المدة: ساعة واحدة\n🆔 Telegram ID الطالب: ${message.from?.id || "غير متاح"}`
-        });
-      } catch (adminErr) {
-        console.error("Could not notify admin about trial code:", adminErr.message);
-      }
     } catch (err) {
       console.error("Trial code creation failed:", err.message);
       if (err.status === 409) {
@@ -173,22 +166,141 @@ async function handleTrialFlow(message, text) {
   return false;
 }
 
+async function getTelegramPhotoBuffer(fileId) {
+  const file = await telegram("getFile", { file_id: fileId });
+  if (!file.file_path) throw new Error("Telegram file path missing");
+  const response = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`);
+  if (!response.ok) throw new Error(`Photo download failed: ${response.status}`);
+  const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > 8 * 1024 * 1024) throw new Error("Photo too large");
+  return Buffer.from(arrayBuffer);
+}
+
+// Estimates receipt-likeness only; it cannot prove payment or reliably detect edits.
+async function analyzePaymentImage(buffer) {
+  if (!OPENAI_API_KEY) return { isReceipt: null, confidence: 0, provider: "غير محدد", warnings: "تحليل الصور غير مفعّل" };
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "Analyze whether the image visually resembles an Egyptian payment/transfer receipt. It may be from InstaPay, Vodafone Cash, Orange Cash, Etisalat Cash, Fawry, an app screenshot, or a photo of another phone screen. Return JSON keys is_receipt (boolean), confidence (number 0-100), provider (short Arabic string), visible_reference (string or empty), visual_warnings (short Arabic string). Confidence means visual resemblance to a receipt ONLY, not payment authenticity. Never claim payment is genuine or Photoshop-free; an image alone cannot prove that." },
+        { role: "user", content: [{ type: "text", text: "صنّف الصورة كإيصال تحويل محتمل أو صورة عادية، واذكر علامات عدم الوضوح أو الاشتباه الظاهرة فقط." }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${buffer.toString("base64")}`, detail: "high" } }] }
+      ],
+      max_tokens: 300
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error?.message || `Image analysis failed ${response.status}`);
+  const parsed = JSON.parse(data.choices?.[0]?.message?.content || "{}");
+  return {
+    isReceipt: Boolean(parsed.is_receipt),
+    confidence: Math.max(0, Math.min(100, Number(parsed.confidence) || 0)),
+    provider: String(parsed.provider || "غير محدد").slice(0, 80),
+    visibleReference: String(parsed.visible_reference || "").slice(0, 120),
+    warnings: String(parsed.visual_warnings || "").slice(0, 400)
+  };
+}
+
+async function notifyAdminPayment(record, photoFileId, duplicate) {
+  const duplicateText = duplicate
+    ? `\n🚨 تنبيه تكرار: نفس رقم العملية أو نفس ملف الصورة سبق تسجيله. سجل سابق: ${duplicate.name || "غير معروف"}، Telegram ID: ${duplicate.telegramUserId || "غير معروف"}.`
+    : "";
+  const caption = `📥 طلب مراجعة تحويل جديد\n👤 الاسم: ${record.name || "غير متوفر"}\n📚 الشعبة: ${record.section || "غير متوفر"}\n🆔 Telegram ID: ${record.telegramUserId}\n🔢 رقم العملية: ${record.transactionNumber}\n🏦 المصدر الظاهر: ${record.provider}\n🖼️ تشابه الصورة مع إيصال: ${record.receiptConfidence}% (ليس نسبة صحة الدفع)\n⚠️ ملاحظات الصورة: ${record.visualWarnings || "لا توجد ملاحظات"}${duplicateText}\n\nيرجى التأكد من وصول المبلغ فعليًا قبل تفعيل الاشتراك.`;
+  try {
+    await telegram("sendPhoto", { chat_id: ADMIN_TELEGRAM_ID, photo: photoFileId, caption: caption.slice(0, 1000) });
+  } catch (err) {
+    console.error("Admin payment photo notification failed:", err.message);
+    await telegram("sendMessage", { chat_id: ADMIN_TELEGRAM_ID, text: caption.slice(0, 3900) });
+  }
+}
+
+async function handlePaymentPhoto(message) {
+  const bestPhoto = message.photo?.[message.photo.length - 1];
+  if (!bestPhoto?.file_id) return;
+  const key = trialKey(message);
+  try {
+    const buffer = await getTelegramPhotoBuffer(bestPhoto.file_id);
+    const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
+    const analysis = await analyzePaymentImage(buffer);
+    const store = readStore();
+    store.paymentPending[key] = {
+      fileId: bestPhoto.file_id, imageHash,
+      receiptConfidence: analysis.confidence || 0,
+      provider: analysis.provider || "غير محدد",
+      visualWarnings: analysis.warnings || "",
+      visibleReference: analysis.visibleReference || "",
+      name: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" "),
+      telegramUserId: String(message.from?.id || message.chat.id),
+      createdAt: Date.now()
+    };
+    writeStore(store);
+    if (!OPENAI_API_KEY) {
+      await sendBusinessText(message, "📩 وصلت الصورة. فحص نوع الإيصال بالذكاء الاصطناعي غير مفعّل. ابعت رقم العملية الموجود في الإيصال علشان أبعته للإدارة للمراجعة.");
+    } else if (analysis.isReceipt && analysis.confidence >= 55) {
+      await sendBusinessText(message, `📩 الصورة تبدو كإيصال تحويل من ${analysis.provider || "مصدر دفع"} بنسبة تشابه ظاهري ${analysis.confidence}%، ودي مش نسبة صحة الدفع.\n\nابعت رقم العملية/رقم التحويل الموجود في الإيصال علشان أبعته للإدارة للمراجعة.`);
+    } else {
+      await sendBusinessText(message, "📩 وصلت الصورة. مش قادر أحدد بثقة إنها إيصال تحويل. لو دي صورة التحويل فعلًا، ابعت رقم العملية الموجود فيها وسنراجعها يدويًا.");
+    }
+  } catch (err) {
+    console.error("Payment image processing failed:", err.message);
+    await sendBusinessText(message, "📩 وصلت الصورة، لكن حصلت مشكلة في فحصها. ابعت رقم العملية المكتوب في الإيصال، وسيتم إرسال الصورة والرقم للإدارة للمراجعة.");
+  }
+}
+
+async function handlePaymentTransactionNumber(message, text) {
+  const key = trialKey(message);
+  const store = readStore();
+  const pending = store.paymentPending[key];
+  if (!pending || Date.now() - pending.createdAt > 24 * 60 * 60 * 1000) return false;
+  const transactionNumber = text.trim().replace(/\s+/g, "").slice(0, 120);
+  if (transactionNumber.length < 4) {
+    await sendBusinessText(message, "رقم العملية قصير أو غير واضح. ابعت رقم العملية كاملًا كما يظهر في إيصال التحويل.");
+    return true;
+  }
+  const duplicate = store.paymentRecords.find(r =>
+    String(r.transactionNumber).toLowerCase() === transactionNumber.toLowerCase() ||
+    (pending.imageHash && r.imageHash === pending.imageHash)
+  );
+  const record = {
+    id: crypto.randomUUID(),
+    name: pending.name || message.from?.first_name || "",
+    section: "",
+    telegramUserId: pending.telegramUserId || String(message.from?.id || message.chat.id),
+    transactionNumber,
+    imageHash: pending.imageHash,
+    provider: pending.provider || "غير محدد",
+    receiptConfidence: pending.receiptConfidence || 0,
+    visualWarnings: pending.visualWarnings || "",
+    duplicate: Boolean(duplicate),
+    createdAt: new Date().toISOString()
+  };
+  store.paymentRecords.push(record);
+  delete store.paymentPending[key];
+  writeStore(store);
+  await notifyAdminPayment(record, pending.fileId, duplicate);
+  await sendBusinessText(message, duplicate
+    ? "⚠️ تم استلام البيانات، لكن رقم العملية أو الصورة سبق إرسالها. تم تنبيه الإدارة للمراجعة، وده مش تأكيد للدفع."
+    : "✅ تم استلام صورة التحويل ورقم العملية وإرسالهم للإدارة للمراجعة. سيتم تفعيل الاشتراك بعد التأكد من وصول الدفع.");
+  return true;
+}
+
 async function handleBusinessMessage(message) {
   if (!message || !message.business_connection_id || !message.chat) return;
   if (message.from && message.from.is_bot) return;
-  // Ignore messages sent by the connected business account owner.
   const ownerId = readStore().businessOwnerId;
   if (ownerId && message.from && String(message.from.id) === String(ownerId)) return;
   const store = readStore();
-  // Custom response for any incoming photo (with or without a caption).
   if (Array.isArray(message.photo) && message.photo.length) {
-    const photoReply = String(store.photoReply || "").trim();
-    if (photoReply) await telegram("sendMessage", { business_connection_id: message.business_connection_id, chat_id: message.chat.id, text: photoReply });
+    await handlePaymentPhoto(message);
     return;
   }
   if (!message.text) return;
   const text = message.text.trim();
   if (!text || text.startsWith("/")) return;
+  if (await handlePaymentTransactionNumber(message, text)) return;
   if (await handleTrialFlow(message, text)) return;
   const found = store.replies.filter(r => r.enabled !== false && r.keyword && normalize(text).includes(normalize(r.keyword)))
     .sort((a, b) => normalize(b.keyword).length - normalize(a.keyword).length)[0];
@@ -257,7 +369,7 @@ app.put("/api/replies", (req, res) => {
   const defaultReply = String(body.defaultReply || "").trim().slice(0, 4000);
   const photoReply = String(body.photoReply || "").trim().slice(0, 4000);
   const previous = readStore();
-  writeStore({ replies, defaultReply, photoReply, businessOwnerId: previous.businessOwnerId || "" });
+  writeStore({ replies, defaultReply, photoReply, businessOwnerId: previous.businessOwnerId || "", paymentPending: previous.paymentPending || {}, paymentRecords: previous.paymentRecords || [] });
   res.json({ ok: true, count: replies.length });
 });
 
