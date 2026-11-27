@@ -9,6 +9,7 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "7181451322";
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
@@ -148,6 +149,16 @@ async function handleTrialFlow(message, text) {
       await sendBusinessText(message, fullMessage, {
         inline_keyboard: [[{ text: "📋 نسخ الكود", copy_text: { text: code } }]]
       });
+      // Notify the configured admin separately; an admin notification failure
+      // must not invalidate the student's successfully-created trial code.
+      try {
+        await telegram("sendMessage", {
+          chat_id: ADMIN_TELEGRAM_ID,
+          text: `🎟️ تم إنشاء كود تجربة جديد\n\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 الكود: ${code}\n⏳ المدة: ساعة واحدة\n🆔 Telegram ID الطالب: ${message.from?.id || "غير متاح"}`
+        });
+      } catch (adminErr) {
+        console.error("Could not notify admin about trial code:", adminErr.message);
+      }
     } catch (err) {
       console.error("Trial code creation failed:", err.message);
       if (err.status === 409) {
