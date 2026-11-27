@@ -248,14 +248,22 @@ async function handlePaymentPhoto(message) {
     // لا نقبل الصورة كطلب تحويل إلا إذا صنّفها محلل الصور كإيصال محتمل بدرجة ثقة كافية.
     // هذا لا يثبت وصول الفلوس؛ الإدارة تراجع التحويل فعليًا قبل تفعيل الاشتراك.
     const minimumReceiptConfidence = Number(process.env.PAYMENT_RECEIPT_MIN_CONFIDENCE || 65);
-    if (analysis.isReceipt !== true || Number(analysis.confidence || 0) < minimumReceiptConfidence) {
+    // لو مفتاح OpenAI غير مضبوط، لا نرفض الصور كلها تلقائيًا:
+    // نسجل الصورة للمراجعة اليدوية ونوضح للإدارة أن التصنيف لم يعمل.
+    if (OPENAI_API_KEY && (analysis.isReceipt !== true || Number(analysis.confidence || 0) < minimumReceiptConfidence)) {
       await sendBusinessText(message,
-        "❌ الصورة دي مش واضحة كإيصال تحويل، فمش هسجلها كطلب دفع.\\n\\n" +
-        "لو دي صورة التحويل فعلًا، ابعت صورة واضحة يظهر فيها اسم خدمة التحويل وبيانات العملية. " +
-        "لو دي صورة عادية، ابعتها في رسالة منفصلة أو اكتب سؤالك.\\n\\n" +
-        "⚠️ تصنيف الصورة مش تأكيد للدفع؛ لازم الإدارة تتأكد من وصول المبلغ."
+        "❌ الصورة مش واضحة كإيصال تحويل محتمل، فمش هسجلها كطلب دفع.\\n\\n" +
+        "لو دي صورة التحويل فعلًا، ابعت صورة كاملة وواضحة يظهر فيها اسم خدمة التحويل وبيانات العملية.\\n\\n" +
+        "⚠️ لو التحويل صحيح، الإدارة تقدر تراجع الصورة يدويًا؛ تصنيف الصورة مش تأكيد للدفع."
       );
       return;
+    }
+    if (!OPENAI_API_KEY) {
+      analysis = {
+        isReceipt: null, confidence: 0, provider: "غير محدد",
+        warnings: "تحليل الصور غير مفعّل لعدم ضبط OPENAI_API_KEY؛ يلزم فحص يدوي من الإدارة",
+        visibleReference: ""
+      };
     }
 
     const store = readStore();
