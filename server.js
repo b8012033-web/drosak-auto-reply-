@@ -43,8 +43,25 @@ const DEFAULT_REPLIES = [
   ["الشعبة", "المحتوى بيظهر حسب الشعبة المسجلة في حسابك. لو الشعبة غلط، اكتب «التواصل مع الإدارة» علشان نراجع بياناتك."],
   ["عدد الأجهزة", "كود الاشتراك بيشتغل على عدد الأجهزة المحدد للحساب. لو وصلت للحد المسموح اكتب «التواصل مع الإدارة»."],
   ["التواصل مع الادارة", "أكيد ❤️ ابعت كود الاشتراك بتاعك علشان الإدارة تعرف توصل لحسابك. لو مش معاك كود أو مش مشترك، اكتب «مش معايا»."],
-  ["شكرا", "العفو ❤️ بالتوفيق في دراستك، دروسك بلس معاك دايمًا."],
-  ["مواعيد", "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية لأي إعلان جديد."]
+  ["مواعيد", "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية لأي إعلان جديد."],
+  ["عامل ايه", "الحمد لله بخير ❤️ إنت عامل إيه؟ محتاج أي مساعدة في دروسك بلس؟"],
+  ["ازيك", "الحمد لله تمام ❤️ إنت أخبارك إيه؟"],
+  ["محتاج محاضرة", "أكيد ❤️ ابعت اسم المادة واسم المدرس والمحاضرة اللي محتاجها، وهنساعدك توصلها."],
+  ["فين المحاضرة", "ابعت اسم المادة والمدرس واسم المحاضرة، وقولنا شعبتك علشان نساعدك تلاقيها."],
+  ["عندي مشكلة", "معلش على المشكلة ❤️ احكيلنا حصل إيه، ولو فيه رسالة خطأ ابعت صورة منها علشان نساعدك."],
+  ["محتاج اسأل", "اتفضل اسأل براحتك ❤️ ابعت سؤالك وهنساعدك على قد ما نقدر."],
+  ["عاوز اسأل", "اتفضل ❤️ اكتب سؤالك بطريقتك، وأنا هحاول أساعدك."],
+  ["عايز اسال", "اتفضل ❤️ اكتب سؤالك بطريقتك، وأنا هحاول أساعدك."],
+  ["مش فاهم", "ولا يهمك ❤️ قولنا إيه اللي مش واضح، اسم المادة أو المحاضرة، وهنساعدك."],
+  ["المحاضرة ناقصة", "ابعت اسم المادة والمدرس والمحاضرة الناقصة والشعبة، علشان نراجعها."],
+  ["الملفات مش ظاهرة", "جرّب تدخل على الشعبة والقسم الصحيح. لو الملفات لسه مش ظاهرة، ابعت اسم القسم وصورة للمشكلة."],
+  ["المنصة بطيئة", "معلش ❤️ جرّب تحديث الصفحة وتأكد من الإنترنت. لو البطء مستمر ابعت نوع جهازك وصورة للمشكلة."],
+  ["التجربة مش شغالة", "ابعتلنا صورة للمشكلة اللي ظهرت بعد طلب التجربة، واكتب «التواصل مع الإدارة» علشان نراجعها."],
+  ["اشتراكي مش اتفعل", "معلش على التأخير ❤️ اكتب «أنا دفعت» وابعت صورة الإيصال هنا، وهنراجع طلب تفعيل الاشتراك."],
+  ["عاوز اكلم حد", "أكيد ❤️ اكتب «التواصل مع الإدارة»، وهطلب منك كود الاشتراك أو تقدر تقول «مش معايا» لو مش مشترك."],
+  ["العفو", "تحت أمرك ❤️ إحنا موجودين لو احتجت أي مساعدة."],
+  ["صباح الخير", "صباح النور ❤️ يومك جميل إن شاء الله! محتاج مساعدة في إيه؟"],
+  ["مساء الخير", "مساء النور ❤️ أهلًا بيك، محتاج أي مساعدة؟"]
 ].map(([keyword, reply], i) => ({ id: `builtin-${i + 1}`, keyword, reply, enabled: true }));
 
 if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
@@ -61,11 +78,14 @@ function readStore() {
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     if (!Array.isArray(data.replies)) data.replies = [];
-    if (data.builtInRepliesSeeded !== true) {
+    {
       const existingIds = new Set(data.replies.map(r => String(r?.id || "")));
-      data.replies = [...data.replies, ...DEFAULT_REPLIES.filter(r => !existingIds.has(r.id))];
-      data.builtInRepliesSeeded = true;
-      writeStore(data);
+      const missingBuiltins = DEFAULT_REPLIES.filter(r => !existingIds.has(r.id));
+      if (missingBuiltins.length || data.builtInRepliesSeeded !== true) {
+        data.replies = [...data.replies, ...missingBuiltins];
+        data.builtInRepliesSeeded = true;
+        writeStore(data);
+      }
     }
     if (typeof data.defaultReply !== "string") data.defaultReply = "";
     if (typeof data.photoReply !== "string") data.photoReply = "";
@@ -112,7 +132,13 @@ async function telegram(method, body) {
   if (!result.ok) throw new Error(result.description || `Telegram ${method} failed`);
   return result.result;
 }
-function normalize(s) { return String(s || "").trim().toLocaleLowerCase(); }
+function normalize(s) {
+  return String(s || "").toLocaleLowerCase().trim()
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+    .replace(/[ـ]/g, "").replace(/[؟?!.,،؛:()\[\]{}\-_/\\]+/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
 
 function trialKey(message) {
   return `${message.business_connection_id}:${message.chat.id}`;
@@ -409,15 +435,22 @@ async function handlePaymentIntent(message, text) {
 }
 
 function builtInFaqReply(text) {
-  const n = normalize(text).replace(/[أإآ]/g, "ا");
-  if (/(ازاي|كيف).*(تجرب|تجربة)|تجربة مجانية|كود تجربة|عايز اجرب|عاوز اجرب/.test(n)) return "للتجربة المجانية اكتب «تجربة» أو «عايز أجرب»، وهطلب منك اسمك وشعبتك وبعدها أبعتلك كود التجربة هنا في الشات. التجربة متاحة مرة واحدة لكل حساب.";
-  if (/(سعر|بكام|كام|الاسعار|الباقات|اشتراك شهر|اشتراك سنه|اشتراك سنة)/.test(n)) return "أهلًا بيك ❤️ لمعرفة الباقات الحالية وتفاصيل الاشتراك اكتب «الباقات» أو «عايز أشترك»، ولو حولت بالفعل اكتب «أنا دفعت» وابعت صورة التحويل.";
-  if (/(مش شغال|مش شغاله|مش بيفتح|مش بيفتحش|عطل|مشكله|مشكلة|بيعلق|تحميل بطيء|مش ظاهر)/.test(n)) return "معلش على المشكلة ❤️ ابعت اسم القسم اللي فيه العطل وصورة للشاشة لو تقدر، واكتب «التواصل مع الإدارة» علشان نوصلك بالدعم.";
+  const n = normalize(text);
+  if (/^(عامل ايه|عامله ايه|ازيك|اخبارك ايه|كيفك)$/.test(n)) return "الحمد لله بخير ❤️ إنت عامل إيه؟ محتاج أي مساعدة في دروسك بلس؟";
+  if (/^(صباح الخير|صباح النور)$/.test(n)) return "صباح النور ❤️ يومك جميل إن شاء الله! محتاج مساعدة في إيه؟";
+  if (/^(مساء الخير|مساء النور)$/.test(n)) return "مساء النور ❤️ أهلًا بيك، محتاج أي مساعدة؟";
+  if (/^(السلام عليكم|سلام عليكم|السلام عليكو)$/.test(n)) return "وعليكم السلام ورحمة الله وبركاته ❤️ أهلًا بيك في دروسك بلس.";
+  if (/^(شكرا|شكراً|تسلم|تسلمي|متشكر|تمام|حلو)$/.test(n)) return "العفو ❤️ إحنا موجودين دايمًا لو احتجت أي حاجة.";
+  if (/(محتاج|محتاجه|عايز|عاوز|عاوزه|فين|مش لاقي|مش لاقيه).*(محاضره|محاضرة|درس|ملف|pdf|فيديو)/.test(n) || /(محاضره ناقصه|محاضره مش ظاهره|المحاضره مش موجوده)/.test(n)) return "أكيد ❤️ ابعت اسم المادة واسم المدرس والمحاضرة اللي محتاجها، وقولنا شعبتك علشان نساعدك توصلها.";
+  if (/(عندي مشكله|في مشكله|محتاج مساعده|عايز مساعده|عاوز مساعده|مش فاهم|مش عارف اعمل|المنصه فيها عطل)/.test(n)) return "معلش على المشكلة ❤️ احكيلنا حصل إيه، ولو فيه رسالة خطأ ابعت صورة منها، وهنساعدك.";
+  if (/(عايز اسال|عاوز اسال|محتاج اسال|عندي سؤال|عايز استفسر|عاوز استفسر|استفسار عن حاجه)/.test(n)) return "اتفضل اسأل براحتك ❤️ اكتب سؤالك بطريقتك وهنحاول نساعدك.";
+  if (/(ازاي|كيف).*(تجرب|تجربه)|تجربه مجانيه|كود تجربه|عايز اجرب|عاوز اجرب/.test(n)) return "للتجربة المجانية اكتب «تجربة» أو «عايز أجرب»، وهطلب منك اسمك وشعبتك وبعدها أبعتلك كود التجربة هنا في الشات. التجربة متاحة مرة واحدة لكل حساب.";
+  if (/(سعر|بكام|كام|الاسعار|الباقات|اشتراك شهر|اشتراك سنه|اشتراك سنوي)/.test(n)) return "أهلًا بيك ❤️ لمعرفة الباقات الحالية وتفاصيل الاشتراك اكتب «الباقات» أو «عايز أشترك»، ولو حولت بالفعل اكتب «أنا دفعت» وابعت صورة التحويل.";
+  if (/(مش شغال|مش شغاله|مش بيفتح|مش بيفتحش|عطل|مشكله|بيعلق|تحميل بطيء|مش ظاهر|مش ظاهره)/.test(n)) return "معلش على المشكلة ❤️ ابعت اسم القسم اللي فيه العطل وصورة للشاشة لو تقدر، واكتب «التواصل مع الإدارة» علشان نوصلك بالدعم.";
   if (/(الكود|كود الدخول|نسيت الكود|الكود مش شغال|الكود منتهي)/.test(n)) return "كود الدخول بيتبعتلك هنا بعد التجربة أو تفعيل الاشتراك. لو الكود مش شغال، اكتب «التواصل مع الإدارة» وابعت كودك علشان نراجع الحساب.";
-  if (/(مدرس|المدرسين|المحاضرات|المحاضره|المحاضرة|الفيديو|الفيديوهات|الملفات|pdf|الملخصات|الكويز|الامتحان)/.test(n)) return "المحتوى بيتقسم حسب الشعبة والقسم داخل منصة دروسك بلس. افتح القسم المطلوب، ولو محاضرة ناقصة أو مش ظاهرة ابعت اسمها والشعبة للدعم.";
-  if (/(ميعاد|جدول|مواعيد|هينزل امتى|تنزل امتى|الجدول)/.test(n)) return "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية علشان أي إعلان جديد.";
-  if (/(تواصل|اكلم|كلم الادمن|الدعم|خدمة العملاء|محتاج مساعدة|عايز مساعدة|عاوز مساعدة)/.test(n)) return "أكيد ❤️ اكتب «التواصل مع الإدارة» وهطلب منك كود الاشتراك علشان نقدر نراجع حسابك ونوصل طلبك للمسؤول.";
-  if (/(شكرا|شكراً|تسلم|تمام|حبيبي|حلو)/.test(n)) return "العفو ❤️ بالتوفيق في دراستك، دروسك بلس معاك دايمًا.";
+  if (/(مدرس|المدرسين|المحاضرات|المحاضره|الفيديو|الفيديوهات|الملفات|pdf|الملخصات|الكويز|الامتحان)/.test(n)) return "المحتوى بيتقسم حسب الشعبة والقسم داخل منصة دروسك بلس. ابعت اسم المادة والمدرس والمحاضرة اللي بتدور عليها، ولو مش ظاهرة اكتب «التواصل مع الإدارة».";
+  if (/(ميعاد|جدول|مواعيد|هينزل امتى|تنزل امتى)/.test(n)) return "لحد دلوقتي مفيش مواعيد مؤكدة أقدر أأكدها. تابع قناة التليجرام الرسمية علشان أي إعلان جديد.";
+  if (/(تواصل|اكلم|كلم الادمن|الدعم|خدمه العملاء|التواصل مع الاداره)/.test(n)) return "أكيد ❤️ اكتب «التواصل مع الإدارة» وهطلب منك كود الاشتراك علشان نراجع حسابك ونوصل طلبك للمسؤول.";
   return null;
 }
 
@@ -769,9 +802,33 @@ async function handleBusinessMessage(message) {
   if (await handleTrialFlow(message, text)) return;
   if (await handleContactFlow(message, text)) return;
   if (await handlePaymentIntent(message, text)) return;
+  // Exact greetings are answered once per chat window, not on every repeated hello.
+  const normalizedGreeting = normalize(text);
+  if (/^(اهلا|اهلا بيك|اهلا وسهلا|ازيك|عامل ايه|عامله ايه|السلام عليكم|سلام عليكم|صباح الخير|مساء الخير)$/.test(normalizedGreeting)) {
+    store.greetingAt = store.greetingAt && typeof store.greetingAt === "object" ? store.greetingAt : {};
+    const greetingKey = String(message.chat.id);
+    const lastGreetingAt = Number(store.greetingAt[greetingKey] || 0);
+    if (Date.now() - lastGreetingAt < 2 * 60 * 60 * 1000) return;
+    store.greetingAt[greetingKey] = Date.now();
+    writeStore(store);
+  }
   const found = store.replies.filter(r => r.enabled !== false && r.keyword && normalize(text).includes(normalize(r.keyword)))
     .sort((a, b) => normalize(b.keyword).length - normalize(a.keyword).length)[0];
-  const reply = found ? found.reply : (builtInFaqReply(text) || store.defaultReply || "أهلًا بيك في دروسك بلس ❤️ اكتب «تجربة» للتجربة المجانية، أو «أنا دفعت» لمتابعة الاشتراك، أو «التواصل مع الإدارة» للدعم.");
+  const faqReply = builtInFaqReply(text);
+  let reply = found ? found.reply : faqReply;
+  if (!reply && store.defaultReply && store.defaultReply.trim()) reply = store.defaultReply.trim();
+  if (!reply) reply = "ممكن توضحلي محتاج إيه بالضبط؟ ❤️ تقدر تسأل عن محاضرة، مشكلة في المنصة، الاشتراك أو أي استفسار.";
+  // Prevent the same fallback/default welcome from flooding the student's chat.
+  if (!found && !faqReply) {
+    store.fallbackReplyAt = store.fallbackReplyAt && typeof store.fallbackReplyAt === "object" ? store.fallbackReplyAt : {};
+    const fallbackKey = String(message.chat.id);
+    const lastAt = Number(store.fallbackReplyAt[fallbackKey] || 0);
+    if (Date.now() - lastAt < 10 * 60 * 1000) return;
+    store.fallbackReplyAt[fallbackKey] = Date.now();
+    const keys = Object.keys(store.fallbackReplyAt);
+    if (keys.length > 2000) for (const oldKey of keys.slice(0, keys.length - 1500)) delete store.fallbackReplyAt[oldKey];
+    writeStore(store);
+  }
   if (!reply || !reply.trim()) return;
   await sendBusinessText(message, reply);
 }
