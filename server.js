@@ -103,9 +103,16 @@ async function handleTrialFlow(message, text) {
   const state = trialFlow.get(key);
   const normalized = normalize(text);
   if (!state) {
-    if (["تجربة", "كود تجربة", "كود", "trial", "start"].includes(normalized) || normalized.includes("تجرب") || normalized.includes("trial")) {
+    // Recognize common Egyptian Arabic requests to start a free trial.
+    const trialIntent =
+      normalized.includes("تجرب") ||
+      normalized.includes("تجريب") ||
+      normalized.includes("اجرب") ||
+      normalized.includes("جرب") ||
+      normalized.includes("trial");
+    if (trialIntent) {
       trialFlow.set(key, { step: "name", createdAt: Date.now() });
-      await sendBusinessText(message, "علشان أطلعلك كود تجربة لمدة ساعة، ابعت اسمك بالكامل.");
+      await sendBusinessText(message, "🎉 أهلاً بيك في منصة دروسك بلس!\n\nعلشان نطلعلك كود التجربة المجانية لمدة ساعة، ابعت اسمك بالكامل.");
       return true;
     }
     return false;
@@ -137,14 +144,14 @@ async function handleTrialFlow(message, text) {
     trialFlow.delete(key);
     try {
       const code = await createTrialCode(state.name, section, message.from?.id);
-      const fullMessage = `بيانات تجربة دروسك بلس\nالاسم: ${state.name}\nالشعبة: ${section}\nكود التجربة: ${code}\nالمدة: ساعة واحدة\nملاحظة: تبدأ مدة الساعة عند تفعيل الكود لأول مرة.`;
+      const fullMessage = `🎉 أهلاً بيك في منصة دروسك بلس!\n\n👤 الاسم: ${state.name}\n📚 الشعبة: ${section}\n🔑 كود الدخول: ${code}\n\n🌟 هذا كود ساعة واحدة.\n\n💙 متنساش إن كل المدرسين اللي هتشوفهم في المنصة بـ200ج في الشهر.\n⭐ متنساش تقولنا رأيك في المنصة وتقول لأصحابك.\n\n🌐 رابط الدخول للمنصة:\nhttps://www.durosakplus.com/`;
       await sendBusinessText(message, fullMessage, {
-        inline_keyboard: [[{ text: "📋 نسخ بيانات التجربة كاملة", copy_text: { text: fullMessage } }]]
+        inline_keyboard: [[{ text: "📋 نسخ الكود", copy_text: { text: code } }]]
       });
     } catch (err) {
       console.error("Trial code creation failed:", err.message);
       if (err.status === 409) {
-        await sendBusinessText(message, "حسابك استخدم كود التجربة قبل كده. التجربة متاحة مرة واحدة لكل حساب تيليجرام، حتى لو مسحت المحادثة.");
+        await sendBusinessText(message, "معلش يا بطل ❤️\nإنت جربت قبل كده، والتجربة المجانية بتكون مرة واحدة بس لكل حساب، فمش هينفع تجرب تاني للأسف.\n\nهيبقى لازم تشترك. قولي بقى إنت عاوز تشترك في أنهي باقة؟");
       } else {
         await sendBusinessText(message, "حصلت مشكلة أثناء إنشاء كود التجربة. جرّب بعد قليل أو تواصل مع الدعم.");
       }
