@@ -16,6 +16,7 @@ const PLATFORM_API_URL = String(process.env.PLATFORM_API_URL || "").replace(/\/$
 const BOT_TRIAL_SECRET = process.env.BOT_TRIAL_SECRET;
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "9139960225";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const SUBSCRIBERS_GROUP_ID = String(process.env.SUBSCRIBERS_GROUP_ID || "").trim();
 const DATA_FILE = process.env.DATA_FILE || "/data/replies.json";
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN;
 const sessions = new Map();
@@ -71,7 +72,7 @@ if (!BOT_TOKEN || !ADMIN_PASSWORD || !WEBHOOK_SECRET) {
 
 function ensureStore() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: DEFAULT_REPLIES, builtInRepliesSeeded: true, defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [] }, null, 2));
+  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({ replies: DEFAULT_REPLIES, builtInRepliesSeeded: true, defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [], groupVerifyFlow: {} }, null, 2));
 }
 function readStore() {
   ensureStore();
@@ -97,8 +98,9 @@ function readStore() {
     if (!data.contactFlow || typeof data.contactFlow !== "object") data.contactFlow = {};
     if (!data.contactTickets || typeof data.contactTickets !== "object") data.contactTickets = {};
     if (!Array.isArray(data.imageReplies)) data.imageReplies = [];
+    if (!data.groupVerifyFlow || typeof data.groupVerifyFlow !== "object") data.groupVerifyFlow = {};
     return data;
-  } catch { return { replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [] }; }
+  } catch { return { replies: [], defaultReply: "", photoReply: "", paymentPending: {}, paymentRecords: [], paymentAdminFlows: {}, photoContext: {}, contactFlow: {}, contactTickets: {}, imageReplies: [], groupVerifyFlow: {} }; }
 }
 function writeStore(data) {
   ensureStore();
@@ -918,10 +920,109 @@ async function handleBusinessMessage(message) {
   if (!reply || !reply.trim()) return;
   await sendBusinessText(message, reply);
 }
+async function verifyPlatformSubscription(telegramUserId, code = "") {
+  if (!PLATFORM_API_URL || !BOT_TRIAL_SECRET) throw new Error("PLATFORM_API_URL أو BOT_TRIAL_SECRET غير مضبوط");
+  const response = await fetch(`${PLATFORM_API_URL}/api/bot/subscription/check`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-bot-trial-secret": BOT_TRIAL_SECRET },
+    body: JSON.stringify({ telegramUserId: String(telegramUserId), code: String(code || "").trim() })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success || !data.active) {
+    const err = new Error(data.error || "الكود غير نشط أو الاشتراك منتهي");
+    err.status = response.status;
+    throw err;
+  }
+  return data;
+}
+async function sendSubscriberInvite(telegramUserId) {
+  if (!SUBSCRIBERS_GROUP_ID) throw new Error("SUBSCRIBERS_GROUP_ID غير مضبوط على خدمة البوت");
+  const invite = await telegram("createChatInviteLink", {
+    chat_id: SUBSCRIBERS_GROUP_ID,
+    name: `student-${String(telegramUserId).slice(-10)}`,
+    creates_join_request: true,
+    expire_date: Math.floor(Date.now() / 1000) + 24 * 60 * 60
+  });
+  await telegram("sendMessage", {
+    chat_id: telegramUserId,
+    text: `✅ تم التحقق من اشتراكك في دروسك بلس.\n\nده رابط الجروب الخاص بيك، ابعت طلب انضمام من خلاله، والبوت هيقبلك تلقائيًا بعد مراجعة الاشتراك.\n\nالرابط صالح لمدة 24 ساعة:`,
+    reply_markup: { inline_keyboard: [[{ text: "📥 طلب الانضمام للجروب", url: invite.invite_link }]] }
+  });
+}
+async function startGroupAccess(message) {
+  const telegramUserId = String(message.from.id);
+  try {
+    await verifyPlatformSubscription(telegramUserId);
+    await sendSubscriberInvite(telegramUserId);
+  } catch (err) {
+    if (err.status === 404 || err.status === 400 || /غير نشط|منتهي|غير مربوط|لا يوجد/i.test(err.message)) {
+      const store = readStore();
+      store.groupVerifyFlow[telegramUserId] = { step: "code", createdAt: Date.now() };
+      writeStore(store);
+      await telegram("sendMessage", { chat_id: telegramUserId, text: "🔐 علشان تدخل جروب الطلاب المشتركين، ابعت كود الاشتراك الفعّال بتاعك هنا.\n\nالكود هيتراجع من قاعدة بيانات المنصة، ولو صحيح هنبعتلك رابط طلب الانضمام." });
+    } else {
+      console.error("Group subscription check failed:", err.message);
+      await telegram("sendMessage", { chat_id: telegramUserId, text: "حصلت مشكلة في التحقق من الاشتراك دلوقتي. جرّب كمان شوية أو تواصل مع الإدارة." });
+    }
+  }
+}
+async function handleGroupCodeMessage(message, text) {
+  const store = readStore();
+  const userId = String(message.from.id);
+  const flow = store.groupVerifyFlow?.[userId];
+  if (!flow || flow.step !== "code") return false;
+  if (Date.now() - Number(flow.createdAt || 0) > 15 * 60 * 1000) {
+    delete store.groupVerifyFlow[userId]; writeStore(store);
+    await telegram("sendMessage", { chat_id: userId, text: "انتهت مهلة التحقق. ابعت /group وابدأ من جديد." });
+    return true;
+  }
+  const code = text.trim();
+  if (!/^[A-Za-z0-9_-]{3,64}$/.test(code)) {
+    await telegram("sendMessage", { chat_id: userId, text: "الكود شكله غير صحيح. ابعت كود الاشتراك فقط من غير مسافات." });
+    return true;
+  }
+  try {
+    await verifyPlatformSubscription(userId, code);
+    delete store.groupVerifyFlow[userId]; writeStore(store);
+    await sendSubscriberInvite(userId);
+  } catch (err) {
+    console.warn("Group code verification rejected:", err.message);
+    await telegram("sendMessage", { chat_id: userId, text: "❌ الكود غير صحيح أو الاشتراك مش فعّال/منتهي. راجع الكود أو تواصل مع الإدارة." });
+  }
+  return true;
+}
+async function handleJoinRequest(request) {
+  if (!request?.from?.id || !request?.chat?.id) return;
+  if (!SUBSCRIBERS_GROUP_ID) { console.error("SUBSCRIBERS_GROUP_ID is not set; refusing to approve join requests."); return; }
+  if (String(request.chat.id) !== SUBSCRIBERS_GROUP_ID) return;
+  const userId = String(request.from.id);
+  try {
+    await verifyPlatformSubscription(userId);
+    await telegram("approveChatJoinRequest", { chat_id: request.chat.id, user_id: request.from.id });
+    try { await telegram("sendMessage", { chat_id: request.from.id, text: "🎉 تم قبول طلب انضمامك لجروب دروسك بلس. أهلًا بيك! ❤️" }); } catch {}
+  } catch (err) {
+    console.warn("Join request not approved:", err.message);
+    try { await telegram("declineChatJoinRequest", { chat_id: request.chat.id, user_id: request.from.id }); } catch (declineErr) { console.error("Could not decline join request:", declineErr.message); }
+    try { await telegram("sendMessage", { chat_id: request.from.id, text: "طلب الانضمام مرفوض لأن حساب تيليجرام مش مربوط بكود اشتراك فعّال. افتح البوت واضغط Start، ثم ابعت /group واكتب كودك للتحقق." }); } catch {}
+  }
+}
 async function handleRegularMessage(message) {
-  if (!message || !message.from || message.from.is_bot) return;
-  if (String(message.from.id) !== String(ADMIN_TELEGRAM_ID) || !message.text) return;
-  await handlePaymentAdminText(message, message.text.trim());
+  if (!message || !message.from || message.from.is_bot || !message.text) return;
+  const text = message.text.trim();
+  if (String(message.from.id) === String(ADMIN_TELEGRAM_ID)) {
+    if (text === "/groupid" && message.chat?.id) {
+      await telegram("sendMessage", { chat_id: message.chat.id, text: `🆔 Group Chat ID: ${message.chat.id}` });
+      return;
+    }
+    await handlePaymentAdminText(message, text);
+    return;
+  }
+  const normalized = normalize(text);
+  if (/^\/start(?:\s|$)/i.test(text) || /^\/group(?:\s|$)/i.test(text) || normalized === "الجروب" || normalized === "جروب الطلاب" || normalized.includes("رابط الجروب") || normalized.includes("عاوز ادخل الجروب") || normalized.includes("عايز ادخل الجروب")) {
+    await startGroupAccess(message);
+    return;
+  }
+  if (await handleGroupCodeMessage(message, text)) return;
 }
 
 app.get("/", (_req, res) => res.send("Drosak Plus Auto Reply is running."));
@@ -966,6 +1067,7 @@ app.post(`/telegram/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
     if (update.business_message) await handleBusinessMessage(update.business_message);
     if (update.message) await handleRegularMessage(update.message);
     if (update.callback_query) await handlePaymentCallback(update.callback_query);
+    if (update.chat_join_request) await handleJoinRequest(update.chat_join_request);
   } catch (err) { console.error("Update handling error:", err.message); }
 });
 
@@ -1014,7 +1116,7 @@ app.listen(PORT, async () => {
       await telegram("setWebhook", {
         url: `https://${PUBLIC_DOMAIN}/telegram/webhook/${WEBHOOK_SECRET}`,
         secret_token: WEBHOOK_SECRET,
-        allowed_updates: ["business_message", "business_connection", "message", "callback_query"]
+        allowed_updates: ["business_message", "business_connection", "message", "callback_query", "chat_join_request"]
       });
       console.log("Telegram webhook configured.");
     } catch (err) { console.error("Could not configure Telegram webhook:", err.message); }
