@@ -929,11 +929,18 @@ async function verifyPlatformSubscription(telegramUserId, code = "") {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.success || !data.active) {
-    const err = new Error(data.error || "الكود غير نشط أو الاشتراك منتهي");
+    const err = new Error(data.error || `فشل التحقق من المنصة (HTTP ${response.status})`);
     err.status = response.status;
+    err.apiError = String(data.error || "");
     throw err;
   }
   return data;
+}
+function normalizeStudentCode(raw) {
+  return String(raw || "").trim()
+    .replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[۰-۹]/g, d => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/\s+/g, "");
 }
 async function sendSubscriberInvite(telegramUserId) {
   if (!SUBSCRIBERS_GROUP_ID) throw new Error("SUBSCRIBERS_GROUP_ID غير مضبوط على خدمة البوت");
@@ -955,7 +962,11 @@ async function startGroupAccess(message) {
     await verifyPlatformSubscription(telegramUserId);
     await sendSubscriberInvite(telegramUserId);
   } catch (err) {
-    if (err.status === 404 || err.status === 400 || /غير نشط|منتهي|غير مربوط|لا يوجد/i.test(err.message)) {
+    if (err.status === 403 && /Unauthorized/i.test(err.apiError || err.message)) {
+      await telegram("sendMessage", { chat_id: telegramUserId, text: "⚠️ خدمة التحقق مش متوصلة بإعداداتها الصحيحة. الإدارة لازم تراجع BOT_TRIAL_SECRET وPLATFORM_API_URL." });
+      return;
+    }
+    if (err.status === 404 || err.status === 400 || (err.status === 403 && /انتهى الاشتراك|منتهي/i.test(err.message)) || /غير نشط|منتهي|غير مربوط|لا يوجد/i.test(err.message)) {
       const store = readStore();
       store.groupVerifyFlow[telegramUserId] = { step: "code", createdAt: Date.now() };
       writeStore(store);
@@ -976,7 +987,7 @@ async function handleGroupCodeMessage(message, text) {
     await telegram("sendMessage", { chat_id: userId, text: "انتهت مهلة التحقق. ابعت /group وابدأ من جديد." });
     return true;
   }
-  const code = text.trim();
+  const code = normalizeStudentCode(text);
   if (!/^[A-Za-z0-9_-]{3,64}$/.test(code)) {
     await telegram("sendMessage", { chat_id: userId, text: "الكود شكله غير صحيح. ابعت كود الاشتراك فقط من غير مسافات." });
     return true;
@@ -986,8 +997,18 @@ async function handleGroupCodeMessage(message, text) {
     delete store.groupVerifyFlow[userId]; writeStore(store);
     await sendSubscriberInvite(userId);
   } catch (err) {
-    console.warn("Group code verification rejected:", err.message);
-    await telegram("sendMessage", { chat_id: userId, text: "❌ الكود غير صحيح أو الاشتراك مش فعّال/منتهي. راجع الكود أو تواصل مع الإدارة." });
+    console.warn("Group code verification rejected:", err.status || "network", err.message);
+    let userMessage;
+    if (err.status === 409) {
+      userMessage = "⚠️ الكود صحيح لكن حساب تيليجرام مرتبط بكود اشتراك آخر، أو الكود مربوط بحساب تيليجرام مختلف. لو ده اشتراكك الجديد، تواصل مع الإدارة لفك الربط القديم.";
+    } else if (err.status === 403 && /Unauthorized/i.test(err.apiError || err.message)) {
+      userMessage = "⚠️ تعذر التحقق بسبب إعدادات الربط بين البوت والمنصة. الإدارة لازم تراجع BOT_TRIAL_SECRET على الخدمتين.";
+    } else if (err.status === 403 || err.status === 404 || err.status === 400) {
+      userMessage = "❌ الكود مش موجود أو الاشتراك منتهي/موقوف. راجع الكود وتأكد إنه كود اشتراك فعّال.";
+    } else {
+      userMessage = "⚠️ حصل عطل مؤقت أثناء مراجعة الكود من المنصة. جرّب بعد قليل؛ لو استمرت المشكلة ابعت «التواصل مع الإدارة».";
+    }
+    await telegram("sendMessage", { chat_id: userId, text: userMessage });
   }
   return true;
 }
