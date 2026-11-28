@@ -1276,6 +1276,23 @@ async function fbSet(p, data) {
   try { return text ? JSON.parse(text) : null; } catch { return null; }
 }
 
+// Atomically create a Firebase value only if the path is still empty. Used for one-time trial claims.
+async function fbCreateIfAbsent(p, data) {
+  const url = fbUrl(p);
+  const read = await fetchT(url, { headers: { Accept: "application/json", "X-Firebase-ETag": "true" }, cache: "no-store" }, { timeout: 15_000, retries: 0 });
+  const currentText = await read.text();
+  if (!read.ok) throw new Error(`Firebase claim GET failed: ${read.status} ${currentText.slice(0, 160)}`);
+  if (currentText && currentText !== "null") return false;
+  const etag = read.headers.get("etag");
+  if (!etag) throw new Error("Firebase did not return ETag for atomic trial claim");
+  const write = await fetchT(url, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", "If-Match": etag }, body: JSON.stringify(data) }, { timeout: 15_000, retries: 0 });
+  const writeText = await write.text();
+  fbInvalidate(p);
+  if (write.status === 412) return false;
+  if (!write.ok) throw new Error(`Firebase claim PUT failed: ${write.status} ${writeText.slice(0, 160)}`);
+  return true;
+}
+
 async function fbPatch(p, data) {
   const r = await fetchT(fbUrl(p), { method: "PATCH", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(data) }, { timeout: 15_000, retries: 1 });
   const text = await r.text();
@@ -7110,8 +7127,12 @@ app.post("/api/bot/subscription/check", async (req, res) => {
     const existingLink = String(await fbGet(`botStudentLinks/${telegramUserId}`) || "");
     if (existingLink && existingLink !== code) {
       const linkedStudent = await fbGet(`students/${existingLink}`);
-      if (linkedStudent && linkedStudent.active !== false && (!linkedStudent.expiresAt || Date.now() <= Number(linkedStudent.expiresAt))) {
-        return res.status(409).json({ success: false, active: false, error: "حساب تيليجرام مربوط بكود اشتراك آخر" });
+      const linkedExpiry = Number(linkedStudent?.expiresAt || 0);
+      const linkedStillActive = !!linkedStudent && linkedStudent.active !== false && (!linkedExpiry || Date.now() <= linkedExpiry);
+      // A free trial link must not block a student from binding their paid subscription code.
+      const mayReplaceLink = !linkedStillActive || linkedStudent?.createdBy === "telegram-trial";
+      if (!mayReplaceLink) {
+        return res.status(409).json({ success: false, active: false, error: "حساب تيليجرام مربوط بكود اشتراك فعّال آخر. تواصل مع الإدارة لو ده كودك الجديد." });
       }
     }
     if (student.telegramUserId !== telegramUserId) await fbPatch(`students/${code}`, { telegramUserId });
@@ -7141,8 +7162,23 @@ app.post("/api/bot/trial", async (req, res) => {
     if (name.length < 2 || section.length < 2 || !telegramUserId) {
       return res.status(400).json({ success: false, error: "الاسم والشعبة ومعرف تيليجرام مطلوبون" });
     }
+    // Any existing account link is evidence that this Telegram account already received/used a code.
+    // Keep a separate permanent claim so deleting or expiring the code cannot reset the free trial.
     const linkedCode = await fbGet(`botStudentLinks/${telegramUserId}`);
-    if (linkedCode && await fbGet(`students/${linkedCode}`)) return res.status(409).json({ success: false, error: "تم استخدام التجربة من قبل" });
+    const priorClaim = await fbGet(`botTrialClaims/${telegramUserId}`);
+    if (priorClaim) {
+      // Recover an interrupted first issuance only while the claim is still in "creating" state.
+      if (priorClaim.status === "creating" && priorClaim.code) {
+        const priorStudent = await fbGet(`students/${priorClaim.code}`);
+        if (priorStudent && priorStudent.createdBy === "telegram-trial" && String(priorStudent.telegramUserId || "") === telegramUserId) {
+          await fbSet(`botStudentLinks/${telegramUserId}`, priorClaim.code);
+          await fbSet(`botTrialClaims/${telegramUserId}`, { ...priorClaim, status: "issued", issuedAt: now() });
+          return res.json({ success: true, code: priorClaim.code, name: priorStudent.name || name, section: priorStudent.section || section, hours: 1, recovered: true });
+        }
+      }
+      return res.status(409).json({ success: false, error: "تم استخدام التجربة من قبل" });
+    }
+    if (linkedCode) return res.status(409).json({ success: false, error: "تم استخدام التجربة من قبل" });
     const durationMs = resolveDurationMs({ hours: 1 });
     let code = "";
     for (let i = 0; i < 40; i++) {
@@ -7150,6 +7186,10 @@ app.post("/api/bot/trial", async (req, res) => {
       if (!(await fbGet(`students/${candidate}`))) { code = candidate; break; }
     }
     if (!code) return res.status(503).json({ success: false, error: "تعذر إنشاء كود، حاول مرة أخرى" });
+    const claimCreated = await fbCreateIfAbsent(`botTrialClaims/${telegramUserId}`, {
+      telegramUserId, code, claimedAt: now(), status: "creating", source: "telegram-bot"
+    });
+    if (!claimCreated) return res.status(409).json({ success: false, error: "تم استخدام التجربة من قبل" });
     const record = {
       name,
       section: section || null,
@@ -7171,9 +7211,26 @@ app.post("/api/bot/trial", async (req, res) => {
     };
     await fbSet(`students/${code}`, record);
     await fbSet(`botStudentLinks/${telegramUserId}`, code);
+    await fbSet(`botTrialClaims/${telegramUserId}`, {
+      telegramUserId, code, claimedAt: now(), issuedAt: now(), status: "issued", source: "telegram-bot"
+    });
     return res.json({ success: true, code, name, section, hours: 1 });
   } catch (e) {
     console.error("[bot trial] create failed:", e.message);
+    // Recover a code that was written before a later Firebase write failed; never issue a second code.
+    const telegramUserId = String(req.body?.telegramUserId || "").trim();
+    try {
+      const claim = await fbGet(`botTrialClaims/${telegramUserId}`);
+      if (claim && claim.status === "creating" && claim.code) {
+        const student = await fbGet(`students/${claim.code}`);
+        if (student && student.createdBy === "telegram-trial" && String(student.telegramUserId || "") === telegramUserId) {
+          await fbSet(`botStudentLinks/${telegramUserId}`, claim.code);
+          await fbSet(`botTrialClaims/${telegramUserId}`, { ...claim, status: "issued", issuedAt: now() });
+          return res.json({ success: true, code: claim.code, name: student.name || "", section: student.section || "", hours: 1, recovered: true });
+        }
+        if (!student) await fbDelete(`botTrialClaims/${telegramUserId}`);
+      }
+    } catch (cleanupErr) { console.warn("[bot trial] claim recovery/cleanup failed:", cleanupErr.message); }
     return res.status(500).json({ success: false, error: "تعذر إنشاء كود التجربة" });
   }
 });
